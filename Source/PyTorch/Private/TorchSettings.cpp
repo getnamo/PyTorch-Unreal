@@ -31,6 +31,8 @@ namespace TorchSettingsPrivate
 UTorchSettings::UTorchSettings()
 {
 	SectionName = TEXT("PyTorch");
+	NNEGPURuntimes = { TEXT("NNERuntimeORTDml") };
+	NNECPURuntimes = { TEXT("NNERuntimeORTCpu") };
 }
 
 FString UTorchSettings::TorchBackend(ETorchProfile InProfile)

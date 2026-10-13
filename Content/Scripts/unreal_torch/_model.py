@@ -557,9 +557,10 @@ def _install_handlers():
     ctx = _bridge.current_context()
     if ctx is None or "_torch_run" in ctx.handlers:
         return
-    from . import _streams, rl
+    from . import _export, _streams, rl
     ctx.handlers["_torch_stream"] = [_streams.handle_frame]
     ctx.handlers["_torch_env"] = [rl.handle_frame]
+    ctx.handlers["_torch_export"] = [_export._torch_export]
     for name, fn in (("_torch_load", _torch_load), ("_torch_run", _torch_run), ("_torch_unload", _torch_unload),
                      ("_torch_signature", _torch_signature), ("_torch_list", _torch_list), ("_torch_stats", _torch_stats),
                      ("_torch_load_weights", _torch_load_weights)):

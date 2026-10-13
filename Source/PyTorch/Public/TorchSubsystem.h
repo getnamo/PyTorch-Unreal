@@ -93,6 +93,19 @@ public:
 	/** "Script|ModelName|Process": what identifies a loaded model. */
 	static FString ModelKey(const UTorchModel* Model);
 
+	/** Whether this build runs Python (packaged builds with Python CLI > Packaged Env Mode: None don't). */
+	UFUNCTION(BlueprintPure, Category = "Torch")
+	static bool IsPythonAvailable();
+
+	/** Whether the method's requests run on the model's NNE export: Backend NNE, or Auto without Python. */
+	bool UsesNNE(const UTorchModel* Model, const FString& Method) const;
+
+#if WITH_EDITOR
+	/** Export the model's methods to ONNX (Python), import them as NNE model data next to the asset and check
+	 them against torch; fills the asset's NNE Methods. OnDone: success and a summary. */
+	void ExportToNNE(UTorchModel* Model, TFunction<void(bool bOk, const FString& Summary)> OnDone);
+#endif
+
 private:
 	struct FModelEntry
 	{
@@ -117,6 +130,16 @@ private:
 
 	void EnsureLoadSent(UTorchModel* Model);
 	void SendGroup(UTorchModel* Model, const FString& Method, TArray<FRequest>&& Requests);
+	void SendGroupNNE(UTorchModel* Model, const FString& Method, TArray<FRequest>&& Requests);
+	/** The requests' tensor inputs stacked on dim 0 (sorted by name), and the total rows. */
+	static void StackInputs(const TArray<FRequest>& Requests, TArray<FString>& OutNames, TArray<FPyTensor>& OutTensors, int64& OutRows);
+	/** Whether the model as a whole runs on NNE (every request would). */
+	bool ModelUsesNNE(const UTorchModel* Model) const;
+#if WITH_EDITOR
+	void ExportMethod(TWeakObjectPtr<UTorchModel> Model, TArray<FString> Methods, int32 Index, TSharedRef<TArray<FString>> Summary, TSharedRef<bool> bAllOk,
+		TFunction<void(bool, const FString&)> OnDone);
+	bool ImportExport(UTorchModel* Model, const TSharedPtr<FJsonObject>& Desc, FString& OutSummary);
+#endif
 	static void Fail(TArray<FRequest>& Requests, const FString& Error);
 	void HandleEndFrame();
 	void BindService(UPythonService* Service);

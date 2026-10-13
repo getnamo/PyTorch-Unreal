@@ -23,7 +23,8 @@ enum class ETorchProfile : uint8
 	None,
 };
 
-/** What packaged builds that ship Python (Python CLI > Packaged Env Mode: Bundle or Install On First Run) get. */
+/** What packaged builds that ship Python (Python CLI > Packaged Env Mode: Bundle or Install On First Run) get.
+ Builds without Python (Packaged Env Mode: None) run the Torch Models' NNE exports. */
 UENUM(BlueprintType)
 enum class ETorchPackagedProfile : uint8
 {
@@ -70,6 +71,15 @@ public:
 
 	UPROPERTY(config, EditAnywhere, Category = "Packaging")
 	ETorchPackagedProfile PackagedProfile = ETorchPackagedProfile::CPU;
+
+	/** NNE runtimes for a Torch Model's GPU runs, tried in order (set per platform in Config/<Platform>/
+	 <Platform>Game.ini). Default: ORT DirectML (Win64). */
+	UPROPERTY(config, EditAnywhere, Category = "Shipping")
+	TArray<FString> NNEGPURuntimes;
+
+	/** NNE runtimes for CPU runs, tried in order. Default: ORT CPU. */
+	UPROPERTY(config, EditAnywhere, Category = "Shipping")
+	TArray<FString> NNECPURuntimes;
 
 	/** torch.compile's kernel caches (Inductor, Triton), kept between editor sessions. Relative to the project. */
 	UPROPERTY(config, EditAnywhere, Category = "Performance")

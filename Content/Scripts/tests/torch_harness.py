@@ -92,6 +92,27 @@ def rl_tests(b):
     shutil.rmtree(runs, ignore_errors=True)
 
 
+def export_tests(b):
+    """ut.export.onnx through _torch_export: files, inputs (images: how Unreal converts them), outputs."""
+    out = tempfile.mkdtemp(prefix="torch_export_")
+    r = b.call(O, S, "_torch_export", ["compiled", "f", {"out_dir": out, "static_batch": 8}], timeout=300)
+    d = r[1]["result"] if r and r[1]["ok"] else {}
+    files = d.get("files") or {}
+    check("export: an MLP method -> dynamic + static ONNX, parity rows", r is not None and r[1]["ok"] and [o["name"] for o in d.get("outputs", [])] == ["output"]
+          and all(os.path.exists(files.get(k, "")) for k in ("dynamic", "static", "parity")) and d.get("inputs", [{}])[0].get("shape") == [4], r and r[1])
+    if d:
+        print(f"     export {d.get('export_s')} s, {os.path.getsize(files['dynamic'])} bytes")
+    r = b.call(O, S, "_torch_export", ["imager", "gray", {"out_dir": out}], timeout=300)
+    d = r[1]["result"] if r and r[1]["ok"] else {}
+    inp = (d.get("inputs") or [{}])[0]
+    check("export: an image method -> the converted input's spec; non-tensor outputs left out",
+          r is not None and r[1]["ok"] and inp.get("kind") == "image" and inp.get("size") == [4, 4] and inp.get("gray") is True and inp.get("shape") == [1, 4, 4]
+          and [o["name"] for o in d.get("outputs", [])] == ["mean"] and d.get("dropped_outputs") == ["shape"], r and r[1])
+    r = b.call(O, S, "_torch_export", ["doubler", "double", {"out_dir": out}], timeout=60)
+    check("export: an input without a full shape is an error", r is not None and not r[1]["ok"] and "full shape" in r[1]["error"], r and r[1])
+    shutil.rmtree(out, ignore_errors=True)
+
+
 def examples(b):
     """examples/digits.py: train briefly (MNIST download on first use), publishing into the live model; resume."""
     EO, ES = "torch:examples", "examples/digits.py"
@@ -279,6 +300,7 @@ def main():
     print(f"     {n * 64 / dt:.0f} requests/s in 64-row stacked calls ({dt / n * 1000:.2f} ms per call, engine-free)")
 
     rl_tests(b)
+    export_tests(b)
 
     if "--examples" in args:
         examples(b)

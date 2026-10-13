@@ -9,7 +9,9 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "PythonJob.h"
+#include "TorchBlueprintLibrary.h"
 #include "TorchModel.h"
+#include "TorchNNE.h"
 #include "TorchReachExample.h"
 #include "TorchSubsystem.h"
 #include "TorchTestHelpers.h"
@@ -294,5 +296,108 @@ bool FTorchReachTrainTest::RunTest(const FString&)
 	});
 	return true;
 }
+
+#if WITH_EDITOR
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FTorchReachNNETest, "PyTorch.RL.PolicyOnNNE", TorchTests::Flags)
+bool FTorchReachNNETest::RunTest(const FString&)
+{
+	using namespace TorchReachTests;
+	struct FState
+	{
+		FEnv Env;
+		ATorchReachEnvironment* E = nullptr;
+		UTorchModel* Policy = nullptr;
+		UPythonJob* Job = nullptr;
+		bool bExported = false, bExportOk = false;
+		FString Summary;
+		FPyTensor Obs;
+		TSharedPtr<FTorchResult> Python, NNE;
+		int32 EpisodesFrom = 0;
+	};
+	const TSharedRef<FState> S = MakeShared<FState>();
+	S->Env.Create();
+	S->Policy = NewObject<UTorchModel>(GetTransientPackage(), TEXT("Test_ReachPolicyNNE"));
+	S->Policy->Script = TEXT("examples/reach.py");
+	S->Policy->ModelName = TEXT("reach_policy");
+	S->Policy->AddToRoot();
+	//A policy to ship: behavior cloning of the scripted expert (fast and reliable)
+	S->E = SpawnEnv(S->Env, [](ATorchReachEnvironment* R) { R->NumAgents = 32; R->Mode = ETorchEnvironmentMode::Record; R->RecordingName = TEXT("ReachNNE"); });
+	for (int32 i = 0; i < 151; ++i)
+	{
+		S->E->StepEnvironment();
+	}
+	S->E->SetMode(ETorchEnvironmentMode::Off);
+	Step([S]
+	{
+		S->Job = UTorchSubsystem::Get()->StartJob(S->Policy, TEXT("train_reach_bc"), TEXT("{\"recording\": \"ReachNNE\", \"sessions\": \"latest\", \"epochs\": 15}"), false, true);
+		S->Job->AddToRoot();
+	});
+	WaitUntil(this, TEXT("behavior cloning"), [S] { return S->Job->IsFinished(); }, 600.0);
+	Step([this, S]
+	{
+		TestEqual(TEXT("train_reach_bc completed: ") + S->Job->Error, S->Job->State, EPythonJobState::Completed);
+		UTorchSubsystem::Get()->ExportToNNE(S->Policy, [S](bool bOk, const FString& Summary) { S->bExportOk = bOk; S->Summary = Summary; S->bExported = true; });
+	});
+	WaitUntil(this, TEXT("export"), [S] { return S->bExported; }, 300.0);
+	Step([this, S]
+	{
+		AddInfo(TEXT("export: ") + S->Summary);
+		TestTrue(TEXT("Export To NNE: ") + S->Summary, S->bExportOk && S->Policy->FindNNEMethod(TEXT("act")) != nullptr);
+		//64 agents' observations through Python and through NNE
+		TArray<float> Values;
+		FRandomStream Random(7);
+		for (int32 i = 0; i < 64 * 4; ++i)
+		{
+			Values.Add(Random.FRandRange(-1.f, 1.f));
+		}
+		S->Obs = FPyTensor::FromFloats(Values, { 64, 4 });
+		FTorchRunOptions Options;
+		Options.bBatched = true;
+		S->Policy->Backend = ETorchBackend::Python;
+		S->Python = MakeShared<FTorchResult>();
+		UTorchSubsystem::Get()->Run(S->Policy, TEXT("act"), { { TEXT("obs"), S->Obs } }, FString(), [Out = S->Python](const FTorchResult& R) { *Out = R; }, Options);
+	});
+	WaitUntil(this, TEXT("python act"), [S] { return S->Python->bSuccess || !S->Python->Error.IsEmpty(); });
+	Step([S]
+	{
+		FTorchRunOptions Options;
+		Options.bBatched = true;
+		S->Policy->Backend = ETorchBackend::NNE;
+		S->NNE = MakeShared<FTorchResult>();
+		UTorchSubsystem::Get()->Run(S->Policy, TEXT("act"), { { TEXT("obs"), S->Obs } }, FString(), [Out = S->NNE](const FTorchResult& R) { *Out = R; }, Options);
+	});
+	WaitUntil(this, TEXT("nne act"), [S] { return S->NNE->bSuccess || !S->NNE->Error.IsEmpty(); });
+	Step([this, S]
+	{
+		TestTrue(TEXT("python: ") + S->Python->Error, S->Python->bSuccess);
+		TestTrue(TEXT("nne: ") + S->NNE->Error, S->NNE->bSuccess);
+		const TArray<float> A = UTorchBlueprintLibrary::GetOutputFloats(*S->Python, TEXT("actions"));
+		const TArray<float> B = UTorchBlueprintLibrary::GetOutputFloats(*S->NNE, TEXT("actions"));
+		float Diff = A.Num() == B.Num() && A.Num() == 128 ? 0.f : 1e9f;
+		for (int32 i = 0; i < FMath::Min(A.Num(), B.Num()); ++i)
+		{
+			Diff = FMath::Max(Diff, FMath::Abs(A[i] - B[i]));
+		}
+		AddInfo(FString::Printf(TEXT("act on 64 rows: python %.3f ms, %s %.3f ms, max diff %g"), S->Python->ModelMs, *S->NNE->Backend, S->NNE->ModelMs, Diff));
+		TestTrue(FString::Printf(TEXT("NNE acts like torch (max diff %g)"), Diff), Diff < 1e-4f);
+		//The environment runs the policy from NNE (Backend NNE: no Python call)
+		S->E->PolicyModel = S->Policy;
+		S->E->SetMode(ETorchEnvironmentMode::Run);
+		S->E->ResetWithSeed(5);
+		S->EpisodesFrom = Episodes(S->E);
+	});
+	Drive(this, TEXT("the policy on NNE"), S->E, 4, [S] { return Episodes(S->E) >= S->EpisodesFrom + 150; }, 300.0);
+	Step([this, S]
+	{
+		const float Mean = MeanReturn(S->E);
+		AddInfo(FString::Printf(TEXT("the cloned policy on NNE (%s): mean return %.2f"), *FTorchNNE::Get().GetRuntime(S->Policy, TEXT("act")), Mean));
+		TestTrue(FString::Printf(TEXT("the policy reaches its targets from NNE (mean return %.2f)"), Mean), Mean > 1.0f);
+		S->Job->RemoveFromRoot();
+		S->Policy->RemoveFromRoot();
+		S->Env.Destroy();
+	});
+	return true;
+}
+#endif
 
 #endif

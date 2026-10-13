@@ -29,7 +29,9 @@ from ._jobs import TorchJob as Job, data_dir, job
 from ._model import Model, export, get_model, model, signature
 from ._types import Audio, Image, Tensor
 from . import _weights as weights
-from . import data, rl
+from . import _export, data, rl
+
+export.onnx = _export.onnx  # ut.export.onnx(model, method): ONNX for NNE (shipping without Python)
 
 __all__ = ["Model", "model", "export", "get_model", "signature", "Tensor", "Image", "Audio", "weights", "job", "Job", "data_dir",
            "data", "rl"]

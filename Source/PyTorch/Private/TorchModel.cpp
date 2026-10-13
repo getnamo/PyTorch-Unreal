@@ -13,6 +13,11 @@ const FTorchMethodSpec* UTorchModel::FindMethod(const FString& Name) const
 	return Methods.FindByPredicate([&Name](const FTorchMethodSpec& M) { return M.Name == Name; });
 }
 
+const FTorchNNEMethod* UTorchModel::FindNNEMethod(const FString& Name) const
+{
+	return NNEMethods.FindByPredicate([&Name](const FTorchNNEMethod& M) { return M.Method == Name && M.Model; });
+}
+
 TSharedRef<FJsonObject> UTorchModel::MakeLoadOptions() const
 {
 	TSharedRef<FJsonObject> O = MakeShared<FJsonObject>();
@@ -132,5 +137,23 @@ void UTorchModel::RefreshSignature()
 			}
 		}
 	});
+}
+
+void UTorchModel::ExportToNNE()
+{
+	if (UTorchSubsystem* Torch = UTorchSubsystem::Get())
+	{
+		Torch->ExportToNNE(this, [Name = GetName()](bool bOk, const FString& Summary)
+		{
+			if (bOk)
+			{
+				UE_LOG(LogTorch, Display, TEXT("%s: exported to NNE: %s"), *Name, *Summary);
+			}
+			else
+			{
+				UE_LOG(LogTorch, Error, TEXT("%s: Export To NNE failed: %s"), *Name, *Summary);
+			}
+		});
+	}
 }
 #endif

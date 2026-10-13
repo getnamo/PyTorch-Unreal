@@ -76,8 +76,8 @@ class Image(Tensor):
 
     def convert(self, x, device, layout=None):
         x = _to_torch(x, device)
-        if x.dim() == 3:  # one image without a batch dimension
-            x = x.unsqueeze(0)
+        if x.dim() == 3:  # rows of one-channel images (N, H, W): Unreal stacks requests on dim 0
+            x = x.unsqueeze(-1)
         if x.dim() != 4:
             raise ValueError(f"expected images (N, H, W, C) or (N, C, H, W), got shape {tuple(x.shape)}")
         hint = (layout or "").upper()

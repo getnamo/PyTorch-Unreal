@@ -1,5 +1,6 @@
-"""Weights on disk: safetensors (default) or .pt, found under Saved/Torch/Models/<model>/ first, then
-Content/Models/, or downloaded from the Hugging Face Hub ("hf://org/repo/file.safetensors")."""
+"""Weights on disk: safetensors (default) or .pt, found under Saved/Torch/Models/<model>/ first, then the project's
+Content/Models/, then this plugin's (the examples' trained weights), or downloaded from the Hugging Face Hub
+("hf://org/repo/file.safetensors"). Content/Models/ is staged with packaged builds."""
 import os
 import time
 
@@ -7,6 +8,8 @@ import torch
 import unreal_bridge as ue
 
 __all__ = ["saved_dir", "resolve", "load_state", "save_state"]
+
+_PLUGIN_MODELS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "Models"))
 
 
 def saved_dir(model_name=None):
@@ -17,7 +20,8 @@ def saved_dir(model_name=None):
 
 def resolve(path, model_name=None, for_write=False):
     """A weights path: absolute paths as they are; hf:// ids downloaded; relative paths in
-    Saved/Torch/Models/<model>/ (written there), else Content/Models/. None if reading and not found."""
+    Saved/Torch/Models/<model>/ (written there), else Content/Models/ (the project's, then the plugin's). None if
+    reading and not found."""
     if path.startswith("hf://"):
         if for_write:
             raise ValueError("can't write to the Hugging Face Hub")
@@ -33,7 +37,7 @@ def resolve(path, model_name=None, for_write=False):
     if for_write:
         os.makedirs(os.path.dirname(saved), exist_ok=True)
         return saved
-    for candidate in (saved, os.path.join(ue.content_dir or ".", "Models", path)):
+    for candidate in (saved, os.path.join(ue.content_dir or ".", "Models", path), os.path.join(_PLUGIN_MODELS, path)):
         if os.path.exists(candidate):
             return candidate
     return None

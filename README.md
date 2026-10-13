@@ -6,6 +6,8 @@ PyTorch runs **out of process** in an embedded Python (CPython 3.12) with a per-
 - **Models:** each model is loaded once and shared by every caller.
 - **Batching:** requests made in the same tick run as one batched forward pass on the GPU.
 - **Hot reload:** a reloaded script keeps the model's weights.
+- **Training and RL:** jobs train models while the game uses them; Unreal agents are a Gymnasium environment.
+- **Shipping:** packaged games bundle CPU torch, or ship without Python and run the models' ONNX exports on NNE (DirectML or CPU) behind the same nodes.
 
 Status: **in development** (UE 5.8, Win64; Linux later). Plan: `Notes/PyTorchUnreal-Plan.md` in the development project.
 
@@ -165,6 +167,31 @@ def train(job, total_steps: int = 500_000):
 - **Time:** steps advance in fixed simulated time (Step Seconds), not frame time. Kinematic agents can take many steps per tick, so training runs faster than real time.
 - **Gymnasium** is optional: without it (Project Settings > Plugins > PyTorch > Gymnasium) the env has minimal Box / Discrete spaces of its own.
 
+## Shipping: NNE without Python
+
+A Torch Model can carry an **NNE export** of its batched methods, and Run Model uses it where Python isn't there. The node, the named inputs and the outputs stay the same.
+
+1. **Export To NNE** on the Torch Model asset:
+   - It exports each `batch=True` method (or the asset's Export Methods) with `ut.export.onnx`: the dynamo exporter, opset 20, a dynamic batch dimension.
+   - It imports the ONNX files as NNE model data assets next to the Torch Model (`<Asset>_<method>`), and fills the asset's NNE Methods.
+   - It runs the export's reference rows through ORT CPU and DirectML, and checks them against torch's outputs (about 2e-7 on the examples).
+2. **Backend** (on the asset): Auto uses Python where it's available (the editor; packaged builds that ship Python) and NNE otherwise. Python or NNE forces one.
+3. **NNE Runtime:**
+   - Auto times the GPU and CPU runtimes on the first run and keeps the faster one. GPU (DirectML) wins on image models, the CPU on small MLPs.
+   - GPU or CPU forces one.
+   - The runtimes per platform are in Project Settings > Plugins > PyTorch > Shipping: ORT DirectML, then ORT CPU.
+4. **Packaging** (Project Settings > Plugins > Python CLI > Packaged Env Mode):
+   - **None:** no Python in the build; the models run their NNE exports.
+   - **Bundle** (the default) or Install On First Run: CPU torch ships too (PyTorch > Packaged Profile), and the models run in Python.
+   - `Content/Models/` (weights) and the scripts are staged either way.
+
+- **What exports:** what the method does with tensors, as torch ops. Python-side logic on values (`.item()`, `.tolist()`, strings) doesn't trace. Outputs that aren't per-row tensors (text, JSON values) are left out.
+- **Images:** a `ut.Image` input exports as the converted image (e.g. float (N, 1, 28, 28)). Unreal converts textures and render targets the same way before NNE runs: channel order, antialiased resize, gray, normalization, layout.
+- **Static batches:** DirectML is fast only with static shapes. With Export Static Batch N, a second model takes N rows; GPU runs of several rows are padded to it or run in chunks.
+- **Speed:** the reach policy (64 agents) takes 0.28 ms on ORT CPU, against 5.3 ms for a round trip to Python. NNE runs happen on a worker thread, and the result arrives on the game thread.
+- **In Python:** `ut.export.onnx("reach_policy", "act")` or `ut.export.onnx(net, inputs={"obs": (4,)})` writes the files to `Saved/Torch/Export/<model>/`.
+- **Not on NNE yet:** Torch Output Components (streams go to Python), unbatched methods and jobs. In a build without Python, feed a camera to a model with Make Image Tensor From Render Target and Run Model.
+
 ## Example maps
 
 ### Vision: `/PyTorch/Examples/VisionExample`
@@ -228,13 +255,14 @@ Torch->Run(DigitsModel, TEXT("classify"), { { TEXT("image"), ImageTensor } }, TE
 
 ## Tests
 
-- **Engine-free** (unreal_torch over PythonCLI's protocol, 31 checks; add `--examples` to also train the digits example, 36):
+- **Engine-free** (unreal_torch over PythonCLI's protocol, 34 checks; add `--examples` to also train the digits example, 39):
   `<PythonCLI>/ThirdParty/python/Win64/python.exe -I Content/Scripts/tests/torch_harness.py --site <venv>/Lib/site-packages`
   - A second `--site` adds a folder, e.g. one with gymnasium, to test the env with it.
-- **In Unreal** (`PyTorch.Model.*`, `PyTorch.Jobs.*`, `PyTorch.Streams.*`, `PyTorch.RL.*`, `PyTorch.Settings.*`, `PyTorch.Examples.*`):
+- **In Unreal** (`PyTorch.Model.*`, `PyTorch.Jobs.*`, `PyTorch.Streams.*`, `PyTorch.RL.*`, `PyTorch.NNE.*`, `PyTorch.Packaged.*`, `PyTorch.Settings.*`, `PyTorch.Examples.*`):
   `UnrealEditor-Cmd.exe <Project>.uproject -ExecCmds="Automation RunTests PyTorch; Quit" -unattended -nullrhi -nopause`
   - The map tests and `PyTorch.Streams.RenderTargetToModel` need a real RHI: `-RenderOffscreen` instead of `-nullrhi`.
   - The job tests download MNIST once.
+  - `PyTorch.Packaged.*` also run in packaged builds: the examples' NNE exports (and Python, when the build has it). `PyTorch.Tools.ExportExamples` (on demand) refreshes the examples' NNE exports.
 - **Benchmarks** (`PyTorch.Benchmarks.*`, the T0 measurements): see [Tools/Benchmarks](Tools/Benchmarks/README.md).
 
 ## Progress notes
@@ -254,3 +282,8 @@ Torch->Run(DigitsModel, TEXT("classify"), { { TEXT("image"), ImageTensor } }, TE
   - Torch Environment and Torch Agent Component; `UnrealVectorEnv` (Gymnasium, optional), SB3 and PettingZoo adapters; recording and `ut.data.Recording`.
   - The reach example: PPO reaches the target return in seconds, the same seed replays exactly, and behavior cloning matches the scripted expert.
   - Not done: a TorchRL adapter (TorchRL wraps Gymnasium vector envs itself) and Minari export of recordings.
+- **T6, shipping (Win64):** done.
+  - `ut.export.onnx`, Export To NNE (NNE model data assets, parity on ORT CPU and DirectML) and the NNE backend behind Run Model, with Auto / GPU / CPU runtime choice and per-platform runtime lists.
+  - Packaged Win64 builds pass `PyTorch.Packaged.*` without Python (NNE on ORT CPU and DirectML) and with Python (Bundle, CPU torch). A fresh Blueprint-only project from the release archive passes too.
+  - Release archive: `Releases/PyTorch-Unreal/make-release.js` in the development project (PyTorch + PythonCLI + CLISystem).
+  - Later (T7): Linux, ORT WebGPU, NNE for streams.

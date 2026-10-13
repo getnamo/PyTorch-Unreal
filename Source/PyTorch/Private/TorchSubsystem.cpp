@@ -1,10 +1,15 @@
 #include "TorchSubsystem.h"
 #include "PyTorch.h"
+#include "PythonCLISettings.h"
+#include "PythonEnvironment.h"
 #include "PythonJob.h"
 #include "PythonService.h"
 #include "PythonSubsystem.h"
 #include "TorchModel.h"
+#include "TorchNNE.h"
 #include "TorchOutputComponent.h"
+#include "TorchSettings.h"
+#include "NNEModelData.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Dom/JsonObject.h"
@@ -15,6 +20,12 @@
 #include "Modules/ModuleManager.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#if WITH_EDITOR
+#include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
+#include "UObject/Package.h"
+#include "UObject/SavePackage.h"
+#endif
 
 namespace TorchSubsystemPrivate
 {
@@ -181,6 +192,10 @@ void UTorchSubsystem::ResetStoppedModels()
 
 ETorchModelState UTorchSubsystem::GetModelState(const UTorchModel* Model) const
 {
+	if (ModelUsesNNE(Model))
+	{
+		return ETorchModelState::Ready; //NNE instances are made on first use (or Load Model)
+	}
 	const FModelEntry* Entry = Models.Find(ModelKey(Model));
 	return Entry ? Entry->State : ETorchModelState::NotLoaded;
 }
@@ -252,6 +267,21 @@ void UTorchSubsystem::LoadModel(UTorchModel* Model, TFunction<void(bool, const F
 		}
 		return;
 	}
+	if (ModelUsesNNE(Model))
+	{
+		FString Error;
+		bool bOk = true;
+		for (const FTorchNNEMethod& M : Model->NNEMethods)
+		{
+			bOk = bOk && FTorchNNE::Get().Prepare(Model, M.Method, Error);
+		}
+		OnModelLoaded.Broadcast(Model, bOk, Error);
+		if (OnDone)
+		{
+			OnDone(bOk, Error);
+		}
+		return;
+	}
 	FModelEntry& Entry = Models.FindOrAdd(ModelKey(Model));
 	if (Entry.State == ETorchModelState::Ready)
 	{
@@ -284,6 +314,11 @@ void UTorchSubsystem::LoadModel(UTorchModel* Model, TFunction<void(bool, const F
 
 void UTorchSubsystem::UnloadModel(UTorchModel* Model)
 {
+	FTorchNNE::Get().Reset(Model);
+	if (ModelUsesNNE(Model) || !IsPythonAvailable())
+	{
+		return;
+	}
 	UPythonService* Service = GetService(Model);
 	if (!Service)
 	{
@@ -364,7 +399,8 @@ void UTorchSubsystem::Run(UTorchModel* Model, const FString& Method, const TMap<
 	Request.Options = Options;
 	Request.OnResult = MoveTemp(OnResult);
 	Request.Start = FPlatformTime::Seconds();
-	if (!Model || Model->Script.IsEmpty())
+	const bool bNNE = UsesNNE(Model, Method);
+	if (!Model || (Model->Script.IsEmpty() && !bNNE))
 	{
 		TArray<FRequest> One;
 		One.Add(MoveTemp(Request));
@@ -385,7 +421,10 @@ void UTorchSubsystem::Run(UTorchModel* Model, const FString& Method, const TMap<
 			Request.Rows = Pair.Value.Shape.Num() > 0 ? (int32)Pair.Value.Shape[0] : 1;
 		}
 	}
-	EnsureLoadSent(Model); //Calls to the script run in order: the load is first
+	if (!bNNE)
+	{
+		EnsureLoadSent(Model); //Calls to the script run in order: the load is first
+	}
 	if (Options.bImmediate || !Model->bStackRequests)
 	{
 		TArray<FRequest> One;
@@ -446,13 +485,134 @@ void UTorchSubsystem::Fail(TArray<FRequest>& Requests, const FString& Error)
 	}
 }
 
+void UTorchSubsystem::StackInputs(const TArray<FRequest>& Requests, TArray<FString>& OutNames, TArray<FPyTensor>& OutTensors, int64& OutRows)
+{
+	using namespace TorchSubsystemPrivate;
+	const FRequest& First = Requests[0];
+	OutNames.Reset();
+	OutTensors.Reset();
+	First.Inputs.GetKeys(OutNames);
+	OutNames.Sort();
+	OutRows = 0;
+	for (const FRequest& R : Requests)
+	{
+		OutRows += R.Rows;
+	}
+	for (const FString& Name : OutNames)
+	{
+		const FPyTensor& T0 = First.Inputs[Name];
+		FPyTensor& Stacked = OutTensors.AddDefaulted_GetRef();
+		Stacked.DType = T0.DType;
+		for (const FRequest& R : Requests)
+		{
+			Stacked.Data.Append(R.Inputs[Name].Data);
+		}
+		Stacked.Shape = { OutRows };
+		Stacked.Shape.Append(RowShape(T0, First.Options.bBatched));
+	}
+}
+
+bool UTorchSubsystem::IsPythonAvailable()
+{
+	if (FPythonEnvironment::IsPackagedBuild() && GetDefault<UPythonCLISettings>()->PackagedEnvMode == EPythonPackagedEnvMode::None)
+	{
+		return false;
+	}
+	return FPythonEnvironment::HasBundledRuntime();
+}
+
+bool UTorchSubsystem::UsesNNE(const UTorchModel* Model, const FString& Method) const
+{
+	if (!Model || !Model->FindNNEMethod(Method))
+	{
+		return false;
+	}
+	return Model->Backend == ETorchBackend::NNE || (Model->Backend == ETorchBackend::Auto && !IsPythonAvailable());
+}
+
+bool UTorchSubsystem::ModelUsesNNE(const UTorchModel* Model) const
+{
+	return Model && Model->NNEMethods.Num() > 0 && (Model->Backend == ETorchBackend::NNE || (Model->Backend == ETorchBackend::Auto && !IsPythonAvailable()));
+}
+
+void UTorchSubsystem::SendGroupNNE(UTorchModel* Model, const FString& Method, TArray<FRequest>&& Requests)
+{
+	TArray<FString> Names;
+	TArray<FPyTensor> Tensors;
+	int64 Total = 0;
+	StackInputs(Requests, Names, Tensors, Total);
+	TMap<FString, FPyTensor> Inputs;
+	for (int32 i = 0; i < Names.Num(); ++i)
+	{
+		Inputs.Add(Names[i], MoveTemp(Tensors[i]));
+	}
+	const TMap<FString, FString> Layouts = Requests[0].Options.Layouts;
+	TSharedRef<TArray<FRequest>> Shared = MakeShared<TArray<FRequest>>(MoveTemp(Requests));
+	FTorchNNE::Get().Run(Model, Method, MoveTemp(Inputs), Total, Layouts, [Shared, Total](FTorchNNE::FResult&& R)
+	{
+		TArray<FRequest>& Requests = *Shared;
+		const double Now = FPlatformTime::Seconds();
+		if (!R.bSuccess)
+		{
+			for (FRequest& Req : Requests)
+			{
+				if (Req.OnResult)
+				{
+					FTorchResult Out;
+					Out.Error = R.Error;
+					Out.Backend = TEXT("nne");
+					Out.LatencyMs = (float)((Now - Req.Start) * 1000.0);
+					Req.OnResult(Out);
+				}
+			}
+			return;
+		}
+		//The same reply shape as Python's, so the results split per request the same way
+		TSharedRef<FJsonObject> Reply = MakeShared<FJsonObject>();
+		TSharedRef<FJsonObject> Outputs = MakeShared<FJsonObject>();
+		TArray<TSharedPtr<FJsonValue>> PerRow;
+		for (int32 i = 0; i < R.Names.Num(); ++i)
+		{
+			TSharedRef<FJsonObject> Desc = MakeShared<FJsonObject>();
+			Desc->SetNumberField(TEXT("_tensor"), i);
+			Outputs->SetObjectField(R.Names[i], Desc);
+			if (R.Outputs[i].Shape.Num() > 0 && R.Outputs[i].Shape[0] == Total)
+			{
+				PerRow.Add(MakeShared<FJsonValueString>(R.Names[i]));
+			}
+		}
+		Reply->SetObjectField(TEXT("outputs"), Outputs);
+		Reply->SetArrayField(TEXT("per_row"), PerRow);
+		Reply->SetNumberField(TEXT("batch"), (double)Total);
+		Reply->SetNumberField(TEXT("ms"), R.Ms);
+		int64 Offset = 0;
+		for (FRequest& Req : Requests)
+		{
+			FTorchResult Out = MakeResult(Reply, R.Outputs, Offset, Req.Rows, Req.Options.bBatched);
+			Out.Backend = TEXT("nne:") + R.Runtime;
+			Out.LatencyMs = (float)((Now - Req.Start) * 1000.0);
+			Offset += Req.Rows;
+			if (Req.OnResult)
+			{
+				Req.OnResult(Out);
+			}
+		}
+	});
+}
+
 void UTorchSubsystem::SendGroup(UTorchModel* Model, const FString& Method, TArray<FRequest>&& Requests)
 {
 	using namespace TorchSubsystemPrivate;
-	UPythonService* Service = GetService(Model);
+	if (UsesNNE(Model, Method))
+	{
+		SendGroupNNE(Model, Method, MoveTemp(Requests));
+		return;
+	}
+	UPythonService* Service = IsPythonAvailable() ? GetService(Model) : nullptr;
 	if (!Service)
 	{
-		Fail(Requests, TEXT("Python is not available"));
+		Fail(Requests, IsPythonAvailable() ? TEXT("Python is not available")
+			: FString::Printf(TEXT("this build has no Python, and %s has no NNE export of '%s' (Export To NNE on the Torch Model)"), *Model->GetName(), *Method));
 		return;
 	}
 
@@ -470,33 +630,21 @@ void UTorchSubsystem::SendGroup(UTorchModel* Model, const FString& Method, TArra
 		InputsObj->Values = Json->Values;
 	}
 	TArray<FString> Names;
-	First.Inputs.GetKeys(Names);
-	Names.Sort();
 	TArray<FPyTensor> Tensors;
-	for (const FString& Name : Names)
+	int64 TotalRows = 0;
+	StackInputs(Requests, Names, Tensors, TotalRows);
+	for (int32 i = 0; i < Names.Num(); ++i)
 	{
-		const FPyTensor& T0 = First.Inputs[Name];
-		FPyTensor Stacked;
-		Stacked.DType = T0.DType;
-		int64 Total = 0;
-		for (const FRequest& R : Requests)
-		{
-			Stacked.Data.Append(R.Inputs[Name].Data);
-			Total += R.Rows;
-		}
-		Stacked.Shape = { Total };
-		Stacked.Shape.Append(RowShape(T0, First.Options.bBatched));
 		TSharedRef<FJsonObject> Desc = MakeShared<FJsonObject>();
-		Desc->SetNumberField(TEXT("_tensor"), Tensors.Num());
-		Desc->SetStringField(TEXT("dtype"), FPyTensor::DTypeName(Stacked.DType));
+		Desc->SetNumberField(TEXT("_tensor"), i);
+		Desc->SetStringField(TEXT("dtype"), FPyTensor::DTypeName(Tensors[i].DType));
 		TArray<TSharedPtr<FJsonValue>> ShapeValues;
-		for (int64 D : Stacked.Shape)
+		for (int64 D : Tensors[i].Shape)
 		{
 			ShapeValues.Add(MakeShared<FJsonValueNumber>((double)D));
 		}
 		Desc->SetArrayField(TEXT("shape"), ShapeValues);
-		InputsObj->SetObjectField(Name, Desc);
-		Tensors.Add(MoveTemp(Stacked));
+		InputsObj->SetObjectField(Names[i], Desc);
 	}
 	TArray<TSharedPtr<FJsonValue>> Rows;
 	for (const FRequest& R : Requests)
@@ -766,3 +914,273 @@ void UTorchSubsystem::LoadStartupModels()
 		LoadThem();
 	}
 }
+
+// ------------------------------------------------------------------------------------------- NNE export
+
+#if WITH_EDITOR
+void UTorchSubsystem::ExportToNNE(UTorchModel* Model, TFunction<void(bool, const FString&)> OnDone)
+{
+	if (!Model || !GetService(Model))
+	{
+		OnDone(false, Model ? TEXT("Python is not available") : TEXT("no model"));
+		return;
+	}
+	TWeakObjectPtr<UTorchModel> Weak(Model);
+	TWeakObjectPtr<UTorchSubsystem> WeakSelf(this);
+	auto Start = [WeakSelf, Weak, OnDone]()
+	{
+		UTorchSubsystem* Self = WeakSelf.Get();
+		UTorchModel* M = Weak.Get();
+		if (!Self || !M)
+		{
+			return;
+		}
+		TArray<FString> Methods = M->ExportMethods;
+		if (Methods.Num() == 0)
+		{
+			for (const FTorchMethodSpec& Spec : M->Methods)
+			{
+				if (Spec.bBatched)
+				{
+					Methods.Add(Spec.Name);
+				}
+			}
+		}
+		if (Methods.Num() == 0)
+		{
+			OnDone(false, TEXT("no batch=True methods to export"));
+			return;
+		}
+		Self->EnsureLoadSent(M);
+		Self->ExportMethod(Weak, Methods, 0, MakeShared<TArray<FString>>(), MakeShared<bool>(true), OnDone);
+	};
+	if (Model->Methods.Num() == 0 && Model->ExportMethods.Num() == 0)
+	{
+		FetchSignature(Model, [Start, OnDone](bool bOk, const FString& Error)
+		{
+			if (bOk)
+			{
+				Start();
+			}
+			else
+			{
+				OnDone(false, TEXT("the signature: ") + Error);
+			}
+		});
+		return;
+	}
+	Start();
+}
+
+void UTorchSubsystem::ExportMethod(TWeakObjectPtr<UTorchModel> Model, TArray<FString> Methods, int32 Index, TSharedRef<TArray<FString>> Summary, TSharedRef<bool> bAllOk,
+	TFunction<void(bool, const FString&)> OnDone)
+{
+	UTorchModel* M = Model.Get();
+	if (!M)
+	{
+		return;
+	}
+	if (!Methods.IsValidIndex(Index))
+	{
+		//Persist the asset (a real one): its NNE Methods point at the new model data
+		UPackage* Package = M->GetOutermost();
+		if (Package != GetTransientPackage() && FPackageName::IsValidLongPackageName(Package->GetName()))
+		{
+			M->MarkPackageDirty();
+			FSavePackageArgs Args;
+			Args.TopLevelFlags = RF_Public | RF_Standalone;
+			UPackage::SavePackage(Package, M, *FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension()), Args);
+		}
+		OnDone(*bAllOk, FString::Join(*Summary, TEXT("; ")));
+		return;
+	}
+	UPythonService* Service = GetService(M);
+	const FString Method = Methods[Index];
+	TSharedRef<FJsonObject> Options = MakeShared<FJsonObject>();
+	Options->SetNumberField(TEXT("static_batch"), M->ExportStaticBatch);
+	Options->SetStringField(TEXT("out_dir"), FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("Torch/Export") / M->GetName()));
+	const FString Args = PythonWire::ToJsonString(TArray<TSharedPtr<FJsonValue>>{
+		MakeShared<FJsonValueString>(M->GetModelName()), MakeShared<FJsonValueString>(Method), MakeShared<FJsonValueObject>(Options) });
+	TWeakObjectPtr<UTorchSubsystem> WeakSelf(this);
+	Service->CallFunction(TEXT("_torch_export"), Args, {}, [WeakSelf, Model, Methods, Index, Summary, bAllOk, OnDone, Method](const FPythonCallResult& R)
+	{
+		UTorchSubsystem* Self = WeakSelf.Get();
+		UTorchModel* M = Model.Get();
+		if (!Self || !M)
+		{
+			return;
+		}
+		const TSharedPtr<FJsonObject>* Desc = nullptr;
+		if (!R.bSuccess || !R.Result.IsValid() || !R.Result->TryGetObject(Desc))
+		{
+			*bAllOk = false;
+			Summary->Add(FString::Printf(TEXT("%s: %s"), *Method, R.bSuccess ? TEXT("malformed reply") : *R.Error));
+		}
+		else
+		{
+			FString Line;
+			if (!Self->ImportExport(M, *Desc, Line))
+			{
+				*bAllOk = false;
+			}
+			Summary->Add(Line);
+		}
+		Self->ExportMethod(Model, Methods, Index + 1, Summary, bAllOk, OnDone);
+	});
+}
+
+namespace TorchSubsystemPrivate
+{
+	/** An ONNX file as NNE model data: an asset next to the Torch Model (<Asset>_<Suffix>), or a transient object for
+	 transient models. */
+	static UNNEModelData* MakeModelData(UTorchModel* Model, const FString& Suffix, const FString& File, FString& OutError)
+	{
+		TArray64<uint8> Bytes;
+		if (!FFileHelper::LoadFileToArray(Bytes, *File))
+		{
+			OutError = TEXT("can't read ") + File;
+			return nullptr;
+		}
+		const FString AssetName = Model->GetName() + TEXT("_") + Suffix;
+		UPackage* ModelPackage = Model->GetOutermost();
+		if (ModelPackage == GetTransientPackage() || !FPackageName::IsValidLongPackageName(ModelPackage->GetName()))
+		{
+			UNNEModelData* Data = NewObject<UNNEModelData>(Model, MakeUniqueObjectName(Model, UNNEModelData::StaticClass(), *AssetName));
+			Data->Init(TEXT("onnx"), Bytes);
+			return Data;
+		}
+		const FString PackageName = FPackageName::GetLongPackagePath(ModelPackage->GetName()) / AssetName;
+		UPackage* Package = CreatePackage(*PackageName);
+		Package->FullyLoad();
+		UNNEModelData* Data = FindObject<UNNEModelData>(Package, *AssetName);
+		const bool bNew = Data == nullptr;
+		if (bNew)
+		{
+			Data = NewObject<UNNEModelData>(Package, *AssetName, RF_Public | RF_Standalone | RF_Transactional);
+		}
+		Data->Modify();
+		Data->Init(TEXT("onnx"), Bytes);
+		if (bNew)
+		{
+			FAssetRegistryModule::AssetCreated(Data);
+		}
+		Package->MarkPackageDirty();
+		FSavePackageArgs Args;
+		Args.TopLevelFlags = RF_Public | RF_Standalone;
+		if (!UPackage::SavePackage(Package, Data, *FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension()), Args))
+		{
+			OutError = TEXT("couldn't save ") + PackageName;
+		}
+		return Data;
+	}
+}
+
+bool UTorchSubsystem::ImportExport(UTorchModel* Model, const TSharedPtr<FJsonObject>& Desc, FString& OutSummary)
+{
+	using namespace TorchSubsystemPrivate;
+	const FString Method = Desc->GetStringField(TEXT("method"));
+	const TSharedPtr<FJsonObject>* Files = nullptr;
+	FString DynamicFile, StaticFile, ParityFile;
+	if (!Desc->TryGetObjectField(TEXT("files"), Files) || !(*Files)->TryGetStringField(TEXT("dynamic"), DynamicFile))
+	{
+		OutSummary = Method + TEXT(": the export wrote no files");
+		return false;
+	}
+	(*Files)->TryGetStringField(TEXT("static"), StaticFile);
+	(*Files)->TryGetStringField(TEXT("parity"), ParityFile);
+	int32 StaticBatch = 0;
+	Desc->TryGetNumberField(TEXT("static_batch"), StaticBatch);
+
+	FString Error;
+	FTorchNNEMethod Entry;
+	Entry.Method = Method;
+	Entry.SpecJson = PythonWire::ToJsonString(MakeShared<FJsonValueObject>(Desc));
+	Entry.Model = MakeModelData(Model, Method, DynamicFile, Error);
+	if (!StaticFile.IsEmpty() && StaticBatch > 0)
+	{
+		Entry.StaticModel = MakeModelData(Model, FString::Printf(TEXT("%s_b%d"), *Method, StaticBatch), StaticFile, Error);
+		Entry.StaticBatch = Entry.StaticModel ? StaticBatch : 0;
+	}
+	if (!Entry.Model)
+	{
+		OutSummary = FString::Printf(TEXT("%s: %s"), *Method, *Error);
+		return false;
+	}
+	Model->Modify();
+	Model->NNEMethods.RemoveAll([&Method](const FTorchNNEMethod& M) { return M.Method == Method; });
+	Model->NNEMethods.Add(Entry);
+	FTorchNNE::Get().Reset(Model);
+
+	//Parity: the export's reference rows through each runtime NNE made for it, against torch's outputs
+	TMap<FString, FPyTensor> Reference;
+	TArray<FString> Report;
+	bool bParityOk = true;
+	if (!ParityFile.IsEmpty() && FTorchNNE::ReadSafetensors(ParityFile, Reference, Error))
+	{
+		TArray<FPyTensor> Inputs;
+		const TArray<TSharedPtr<FJsonValue>>* InputSpecs = nullptr;
+		if (Desc->TryGetArrayField(TEXT("inputs"), InputSpecs))
+		{
+			for (const TSharedPtr<FJsonValue>& V : *InputSpecs)
+			{
+				if (const FPyTensor* T = Reference.Find(TEXT("in.") + V->AsObject()->GetStringField(TEXT("name"))))
+				{
+					Inputs.Add(*T);
+				}
+			}
+		}
+		const UTorchSettings* Settings = GetDefault<UTorchSettings>();
+		TArray<FString> Runtimes = Settings->NNECPURuntimes;
+		Runtimes.Append(Settings->NNEGPURuntimes);
+		const ETorchNNERuntime Preference = Model->NNERuntime;
+		Model->NNERuntime = ETorchNNERuntime::Auto; //Check every runtime there is
+		for (const FString& Runtime : Runtimes)
+		{
+			const FTorchNNE::FResult R = FTorchNNE::Get().RunNow(Model, Method, Inputs, Runtime);
+			if (!R.bSuccess)
+			{
+				if (!R.Error.Contains(TEXT("isn't one of its runtimes")))
+				{
+					Report.Add(FString::Printf(TEXT("%s failed: %s"), *Runtime, *R.Error));
+					bParityOk = false;
+				}
+				continue;
+			}
+			float MaxDiff = 0.f, MaxAbs = 1.f;
+			for (int32 k = 0; k < R.Names.Num(); ++k)
+			{
+				const FPyTensor* Expected = Reference.Find(TEXT("out.") + R.Names[k]);
+				if (!Expected)
+				{
+					continue;
+				}
+				const TArray<float> A = R.Outputs[k].ToFloats();
+				const TArray<float> B = Expected->ToFloats();
+				for (int32 i = 0; i < FMath::Min(A.Num(), B.Num()); ++i)
+				{
+					MaxDiff = FMath::Max(MaxDiff, FMath::Abs(A[i] - B[i]));
+					MaxAbs = FMath::Max(MaxAbs, FMath::Abs(B[i]));
+				}
+			}
+			if (Entry.ParityMaxDiff < 0.f)
+			{
+				Model->NNEMethods.Last().ParityMaxDiff = MaxDiff;
+				Entry.ParityMaxDiff = MaxDiff;
+			}
+			Report.Add(FString::Printf(TEXT("%s max diff %.2g"), *Runtime, MaxDiff));
+			bParityOk = bParityOk && MaxDiff <= 1e-2f * MaxAbs;
+		}
+		Model->NNEMethods.Last().ParityMaxDiff = Entry.ParityMaxDiff;
+		FTorchNNE::Get().Reset(Model);
+		Model->NNERuntime = Preference;
+	}
+	else
+	{
+		Report.Add(TEXT("not checked: ") + Error);
+	}
+	OutSummary = FString::Printf(TEXT("%s -> %s%s (%s)"), *Method, *GetNameSafe(Entry.Model), Entry.StaticModel ? *FString::Printf(TEXT(" + %s"), *GetNameSafe(Entry.StaticModel)) : TEXT(""),
+		*FString::Join(Report, TEXT(", ")));
+	UE_LOG(LogTorch, Log, TEXT("%s: NNE export %s"), *Model->GetName(), *OutSummary);
+	return bParityOk;
+}
+#endif

@@ -549,7 +549,8 @@ def _install_handlers():
     if ctx is None or "_torch_run" in ctx.handlers:
         return
     for name, fn in (("_torch_load", _torch_load), ("_torch_run", _torch_run), ("_torch_unload", _torch_unload),
-                     ("_torch_signature", _torch_signature), ("_torch_list", _torch_list), ("_torch_stats", _torch_stats)):
+                     ("_torch_signature", _torch_signature), ("_torch_list", _torch_list), ("_torch_stats", _torch_stats),
+                     ("_torch_load_weights", _torch_load_weights)):
         ctx.handlers[name] = [fn]
 
 
@@ -583,9 +584,22 @@ def _torch_signature(name=None):
     return [host(n).signature() for n in list(_classes)]
 
 
+def _torch_load_weights(name, file):
+    """Weights a job in another process published (Saved/Torch/Models/<model>/published.safetensors)."""
+    h = host(name)
+    if h.instance is None:
+        return False
+    h.instance.publish(_weights.load_state(file, h.device))
+    return True
+
+
 def _torch_list():
     ctx = _bridge.current_context()
-    jobs = [s.describe() for s in ctx.job_specs.values()] if ctx is not None else []
+    jobs = []
+    for s in (ctx.job_specs.values() if ctx is not None else ()):
+        d = s.describe()
+        d["process"] = getattr(s.fn, "__ut_job_options__", {}).get("process", "shared")
+        jobs.append(d)
     with _lock:
         names = list(_classes)
     return {"models": [host(n).signature() for n in names], "jobs": jobs}

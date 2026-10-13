@@ -26,6 +26,11 @@ public class PyTorch : ModuleRules
 			"RHI",
 		});
 
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.AddRange(new string[] { "UnrealEd", "InputCore" }); // the example-map play test (PIE)
+		}
+
 		// unreal_torch, the examples and the environment profiles go with packaged builds.
 		RuntimeDependencies.Add(Path.Combine(PluginDirectory, "Content", "Scripts", "..."));
 	}

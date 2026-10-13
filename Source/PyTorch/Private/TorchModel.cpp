@@ -102,6 +102,7 @@ void UTorchModel::ApplySignature(const TSharedPtr<FJsonObject>& Signature, const
 			FTorchJobSpec& Spec = Jobs.AddDefaulted_GetRef();
 			Spec.Name = J->GetStringField(TEXT("name"));
 			J->TryGetStringField(TEXT("doc"), Spec.Doc);
+			J->TryGetStringField(TEXT("process"), Spec.Process);
 			Spec.ParamsJson = PythonWire::ToJsonString(J->TryGetField(TEXT("params")));
 		}
 	}

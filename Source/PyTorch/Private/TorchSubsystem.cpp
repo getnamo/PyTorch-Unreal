@@ -1,5 +1,6 @@
 #include "TorchSubsystem.h"
 #include "PyTorch.h"
+#include "PythonJob.h"
 #include "PythonService.h"
 #include "PythonSubsystem.h"
 #include "TorchModel.h"
@@ -8,6 +9,7 @@
 #include "Dom/JsonObject.h"
 #include "Engine/Engine.h"
 #include "Misc/CoreDelegates.h"
+#include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -603,6 +605,73 @@ void UTorchSubsystem::SendGroup(UTorchModel* Model, const FString& Method, TArra
 			}
 		}
 	});
+}
+
+FString UTorchSubsystem::RunsDir()
+{
+	return FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("Torch/Runs"));
+}
+
+UPythonJob* UTorchSubsystem::StartJob(UTorchModel* Model, const FString& JobName, const FString& ParamsJson, bool bResume, bool bOwnProcess)
+{
+	UPythonSubsystem* Python = UPythonSubsystem::Get();
+	if (!Model || !Python || Model->Script.IsEmpty())
+	{
+		UPythonJob* Failed = NewObject<UPythonJob>(this);
+		Failed->Init(nullptr, JobName, FString());
+		Failed->Fail(Model ? TEXT("Python is not available (or the model has no Script)") : TEXT("Start Job: no model"));
+		return Failed;
+	}
+	const FTorchJobSpec* Spec = Model->Jobs.FindByPredicate([&JobName](const FTorchJobSpec& J) { return J.Name == JobName; });
+	const bool bDedicated = bOwnProcess || (Spec && Spec->Process == TEXT("dedicated"));
+	UPythonService* Service = nullptr;
+	if (bDedicated)
+	{
+		Service = Python->GetService(FString::Printf(TEXT("torch-job:%s#%s"), *Model->Script, *JobName), Model->Script, EPythonServiceProcess::Dedicated, {});
+		if (Service && !Service->OnNativeEvent(TEXT("_torch_publish")).IsBound())
+		{
+			TWeakObjectPtr<UTorchSubsystem> WeakSelf(this);
+			TWeakObjectPtr<UTorchModel> WeakModel(Model);
+			Service->OnNativeEvent(TEXT("_torch_publish")).AddLambda([WeakSelf, WeakModel](const FPythonEventData& Event)
+			{
+				if (UTorchSubsystem* Self = WeakSelf.Get())
+				{
+					Self->ForwardPublish(WeakModel.Get(), Event);
+				}
+			});
+		}
+	}
+	else
+	{
+		Service = GetService(Model);
+	}
+	if (!Service)
+	{
+		UPythonJob* Failed = NewObject<UPythonJob>(this);
+		Failed->Init(nullptr, JobName, FString());
+		Failed->Fail(TEXT("Python is not available"));
+		return Failed;
+	}
+	return Service->StartJob(JobName, ParamsJson, bResume, RunsDir());
+}
+
+void UTorchSubsystem::ForwardPublish(UTorchModel* Model, const FPythonEventData& Event)
+{
+	const TSharedPtr<FJsonObject>* Obj = nullptr;
+	FString ModelName, File;
+	if (!Model || Event.Args.Num() == 0 || !Event.Args[0]->TryGetObject(Obj) || !(*Obj)->TryGetStringField(TEXT("model"), ModelName) || !(*Obj)->TryGetStringField(TEXT("file"), File))
+	{
+		return;
+	}
+	if (ModelName != Model->GetModelName() || GetModelState(Model) == ETorchModelState::NotLoaded)
+	{
+		return; //Not loaded in the game: it picks the weights up when it loads (Saved/Torch/Models)
+	}
+	if (UPythonService* Service = GetService(Model))
+	{
+		Service->CallFunction(TEXT("_torch_load_weights"), PythonWire::ToJsonString(TArray<TSharedPtr<FJsonValue>>{
+			MakeShared<FJsonValueString>(ModelName), MakeShared<FJsonValueString>(File) }), {}, nullptr);
+	}
 }
 
 void UTorchSubsystem::LoadStartupModels()

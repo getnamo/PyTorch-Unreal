@@ -1,0 +1,238 @@
+{
+  "_about": "Generates the MNIST example content (/PyTorch/Examples) with BlueprintOracle: UnrealEditor-Cmd.exe <Project>.uproject -run=BlueprintOracle -migrate -spec=<this file> [-commit] -unattended -nullrhi -nopause",
+  "assets": [
+    {
+      "package": "/PyTorch/Examples/RT_TorchMnistCanvas",
+      "create": {
+        "type": "renderTarget",
+        "properties": { "SizeX": 256, "SizeY": 256, "RenderTargetFormat": "RTF_RGBA8", "ClearColor": "(R=0,G=0,B=0,A=1)" }
+      }
+    },
+    {
+      "package": "/PyTorch/Examples/DA_Digits",
+      "create": {
+        "type": "object",
+        "class": "/Script/PyTorch.TorchModel",
+        "properties": { "Script": "examples/digits.py", "ModelName": "digits" }
+      }
+    },
+    {
+      "package": "/PyTorch/Examples/BP_TorchMnistExample",
+      "create": { "type": "blueprint", "parent": "/Script/Engine.Actor" },
+      "ops": [
+        { "op": "addComponent", "name": "Root", "class": "/Script/Engine.SceneComponent" },
+        { "op": "addComponent", "name": "Torch", "class": "/Script/PyTorch.TorchComponent",
+          "properties": { "Model": "/PyTorch/Examples/DA_Digits.DA_Digits" } },
+        { "op": "addComponent", "name": "Display", "class": "/Script/Engine.StaticMeshComponent", "parent": "Root",
+          "properties": {
+            "StaticMesh": "/Engine/BasicShapes/Plane.Plane",
+            "RelativeLocation": "(X=0,Y=-150,Z=170)",
+            "RelativeRotation": "(Pitch=0,Yaw=90,Roll=90)",
+            "RelativeScale3D": "(X=2.5,Y=2.5,Z=1)",
+            "CastShadow": false
+          } },
+        { "op": "addComponent", "name": "Frame", "class": "/Script/Engine.StaticMeshComponent", "parent": "Root",
+          "properties": {
+            "StaticMesh": "/Engine/BasicShapes/Plane.Plane",
+            "OverrideMaterials": "(\"/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial\")",
+            "RelativeLocation": "(X=4,Y=-150,Z=170)",
+            "RelativeRotation": "(Pitch=0,Yaw=90,Roll=90)",
+            "RelativeScale3D": "(X=2.7,Y=2.7,Z=1)",
+            "CastShadow": false
+          } },
+        { "op": "addComponent", "name": "TitleText", "class": "/Script/Engine.TextRenderComponent", "parent": "Root",
+          "properties": {
+            "Text": "INVTEXT(\"PyTorch-Unreal: MNIST\")",
+            "WorldSize": 36, "HorizontalAlignment": "EHTA_Center",
+            "TextRenderColor": "(R=238,G=76,B=44,A=255)",
+            "RelativeLocation": "(X=0,Y=0,Z=340)", "RelativeRotation": "(Pitch=0,Yaw=180,Roll=0)"
+          } },
+        { "op": "addComponent", "name": "PredictionText", "class": "/Script/Engine.TextRenderComponent", "parent": "Root",
+          "properties": {
+            "Text": "INVTEXT(\"Camera sees: ...\")",
+            "WorldSize": 34, "HorizontalAlignment": "EHTA_Left",
+            "TextRenderColor": "(R=120,G=255,B=120,A=255)",
+            "RelativeLocation": "(X=0,Y=10,Z=240)", "RelativeRotation": "(Pitch=0,Yaw=180,Roll=0)"
+          } },
+        { "op": "addComponent", "name": "DigitText", "class": "/Script/Engine.TextRenderComponent", "parent": "Root",
+          "properties": {
+            "Text": "INVTEXT(\"\")",
+            "WorldSize": 20, "HorizontalAlignment": "EHTA_Left",
+            "RelativeLocation": "(X=0,Y=10,Z=190)", "RelativeRotation": "(Pitch=0,Yaw=180,Roll=0)"
+          } },
+        { "op": "addComponent", "name": "HelpText", "class": "/Script/Engine.TextRenderComponent", "parent": "Root",
+          "properties": {
+            "Text": "INVTEXT(\"[T] train   [R] resume   [S] stop   [N] next digit\")",
+            "WorldSize": 20, "HorizontalAlignment": "EHTA_Left",
+            "TextRenderColor": "(R=170,G=170,B=170,A=255)",
+            "RelativeLocation": "(X=0,Y=10,Z=120)", "RelativeRotation": "(Pitch=0,Yaw=180,Roll=0)"
+          } },
+        { "op": "addComponent", "name": "StatusText", "class": "/Script/Engine.TextRenderComponent", "parent": "Root",
+          "properties": {
+            "Text": "INVTEXT(\"Starting PyTorch...\")",
+            "WorldSize": 18, "HorizontalAlignment": "EHTA_Center",
+            "TextRenderColor": "(R=200,G=220,B=255,A=255)",
+            "RelativeLocation": "(X=0,Y=0,Z=0)", "RelativeRotation": "(Pitch=0,Yaw=180,Roll=0)"
+          } },
+        { "op": "setDefaults", "properties": { "AutoReceiveInput": "Player0" } },
+        { "op": "compile" },
+        { "op": "buildBody", "graph": "EventGraph",
+          "nodes": [
+            { "id": "c_begin", "kind": "comment", "pos": [-40, -80], "size": [2240, 300],
+              "text": "Show the canvas render target on the Display plane; a new test digit every 3 s, the model reads the canvas 4 times a second; train (or resume) right away" },
+            { "id": "begin", "kind": "event", "member": "ReceiveBeginPlay", "pos": [0, 0] },
+            { "id": "display", "kind": "variableGet", "var": "Display", "pos": [180, 120] },
+            { "id": "mid", "kind": "callFunction", "class": "/Script/Engine.PrimitiveComponent", "member": "CreateDynamicMaterialInstance", "pos": [380, 0],
+              "defaults": [ { "pin": "SourceMaterial", "value": "/Engine/EngineMaterials/Widget3DPassThrough_Opaque.Widget3DPassThrough_Opaque" } ] },
+            { "id": "settex", "kind": "callFunction", "class": "/Script/Engine.MaterialInstanceDynamic", "member": "SetTextureParameterValue", "pos": [760, 0],
+              "defaults": [ { "pin": "ParameterName", "value": "SlateUI" }, { "pin": "Value", "value": "/PyTorch/Examples/RT_TorchMnistCanvas.RT_TorchMnistCanvas" } ] },
+            { "id": "timer_digit", "kind": "callFunction", "class": "/Script/Engine.KismetSystemLibrary", "member": "K2_SetTimer", "pos": [1080, 0],
+              "defaults": [ { "pin": "FunctionName", "value": "ShowNextDigit" }, { "pin": "Time", "value": "3.0" }, { "pin": "bLooping", "value": "true" } ] },
+            { "id": "timer_read", "kind": "callFunction", "class": "/Script/Engine.KismetSystemLibrary", "member": "K2_SetTimer", "pos": [1400, 0],
+              "defaults": [ { "pin": "FunctionName", "value": "ReadCanvas" }, { "pin": "Time", "value": "0.25" }, { "pin": "bLooping", "value": "true" } ] },
+            { "id": "torch_begin", "kind": "variableGet", "var": "Torch", "pos": [1560, 140] },
+            { "id": "first_digit", "kind": "callFunction", "class": "/Script/PyTorch.TorchComponent", "member": "RunWithTensor", "pos": [1720, 0],
+              "defaults": [ { "pin": "Method", "value": "sample" } ] },
+            { "id": "train_begin", "kind": "callFunction", "class": "/Script/PyTorch.TorchComponent", "member": "StartJob", "pos": [1980, 0],
+              "defaults": [ { "pin": "JobName", "value": "train_digits" }, { "pin": "ParamsJson", "value": "{\"epochs\": 2}" }, { "pin": "bResume", "value": "true" } ] },
+
+            { "id": "c_next", "kind": "comment", "pos": [-40, 300], "size": [760, 380],
+              "text": "Next digit: the model's sample() answers in On Result (method \"sample\")" },
+            { "id": "next", "kind": "customEvent", "name": "ShowNextDigit", "pos": [0, 380] },
+            { "id": "key_n", "kind": "inputKey", "key": "N", "pos": [0, 500] },
+            { "id": "torch_next", "kind": "variableGet", "var": "Torch", "pos": [200, 600] },
+            { "id": "run_next", "kind": "callFunction", "class": "/Script/PyTorch.TorchComponent", "member": "RunWithTensor", "pos": [400, 380],
+              "defaults": [ { "pin": "Method", "value": "sample" } ] },
+
+            { "id": "c_read", "kind": "comment", "pos": [800, 300], "size": [700, 260],
+              "text": "Read the canvas: its pixels go to read(image), the answer comes in On Result (method \"read\")" },
+            { "id": "read", "kind": "customEvent", "name": "ReadCanvas", "pos": [840, 380] },
+            { "id": "torch_read", "kind": "variableGet", "var": "Torch", "pos": [1000, 480] },
+            { "id": "run_read", "kind": "callFunction", "class": "/Script/PyTorch.TorchComponent", "member": "RunWithRenderTarget", "pos": [1200, 380],
+              "defaults": [ { "pin": "Method", "value": "read" }, { "pin": "InputName", "value": "image" },
+                            { "pin": "RenderTarget", "value": "/PyTorch/Examples/RT_TorchMnistCanvas.RT_TorchMnistCanvas" } ] },
+
+            { "id": "c_keys", "kind": "comment", "pos": [1560, 300], "size": [700, 520], "text": "Training: T starts a new run, R resumes the last one, S stops" },
+            { "id": "key_t", "kind": "inputKey", "key": "T", "pos": [1600, 380] },
+            { "id": "key_r", "kind": "inputKey", "key": "R", "pos": [1600, 520] },
+            { "id": "key_s", "kind": "inputKey", "key": "S", "pos": [1600, 660] },
+            { "id": "torch_keys", "kind": "variableGet", "var": "Torch", "pos": [1780, 760] },
+            { "id": "train", "kind": "callFunction", "class": "/Script/PyTorch.TorchComponent", "member": "StartJob", "pos": [1960, 380],
+              "defaults": [ { "pin": "JobName", "value": "train_digits" }, { "pin": "ParamsJson", "value": "{\"epochs\": 2, \"fresh\": true}" }, { "pin": "bResume", "value": "false" } ] },
+            { "id": "resume", "kind": "callFunction", "class": "/Script/PyTorch.TorchComponent", "member": "StartJob", "pos": [1960, 520],
+              "defaults": [ { "pin": "JobName", "value": "train_digits" }, { "pin": "ParamsJson", "value": "{\"epochs\": 2}" }, { "pin": "bResume", "value": "true" } ] },
+            { "id": "stop", "kind": "callFunction", "class": "/Script/PyTorch.TorchComponent", "member": "StopJobs", "pos": [1960, 660] },
+
+            { "id": "c_results", "kind": "comment", "pos": [-40, 860], "size": [2160, 640],
+              "text": "Model answers (On Result): a sample is drawn into the canvas; a reading is shown" },
+            { "id": "result", "kind": "componentEvent", "component": "Torch", "delegate": "OnResult", "pos": [0, 940] },
+            { "id": "switch", "kind": "switchString", "cases": [ "sample", "read" ], "pos": [320, 940] },
+            { "id": "write", "kind": "callFunction", "class": "/Script/PyTorch.TorchBlueprintLibrary", "member": "WriteOutputToRenderTarget", "pos": [600, 940],
+              "defaults": [ { "pin": "Name", "value": "image" }, { "pin": "RenderTarget", "value": "/PyTorch/Examples/RT_TorchMnistCanvas.RT_TorchMnistCanvas" },
+                            { "pin": "bChannelsFirst", "value": "false" } ] },
+            { "id": "digit_str", "kind": "callFunction", "class": "/Script/PyTorch.TorchBlueprintLibrary", "member": "GetOutputString", "pos": [600, 1140],
+              "defaults": [ { "pin": "Name", "value": "text" } ] },
+            { "id": "digit_conv", "kind": "callFunction", "class": "/Script/Engine.KismetTextLibrary", "member": "Conv_StringToText", "pos": [920, 1140] },
+            { "id": "digit_text", "kind": "variableGet", "var": "DigitText", "pos": [920, 1060] },
+            { "id": "digit_set", "kind": "callFunction", "class": "/Script/Engine.TextRenderComponent", "member": "K2_SetText", "pos": [1200, 940] },
+            { "id": "pred_str", "kind": "callFunction", "class": "/Script/PyTorch.TorchBlueprintLibrary", "member": "GetOutputString", "pos": [600, 1320],
+              "defaults": [ { "pin": "Name", "value": "text" } ] },
+            { "id": "pred_conv", "kind": "callFunction", "class": "/Script/Engine.KismetTextLibrary", "member": "Conv_StringToText", "pos": [920, 1360] },
+            { "id": "pred_text", "kind": "variableGet", "var": "PredictionText", "pos": [920, 1280] },
+            { "id": "pred_set", "kind": "callFunction", "class": "/Script/Engine.TextRenderComponent", "member": "K2_SetText", "pos": [1200, 1260] },
+
+            { "id": "c_job", "kind": "comment", "pos": [-40, 1540], "size": [2160, 700],
+              "text": "Training job events: progress lines, the result, failures (Python errors) on the status line" },
+            { "id": "progress", "kind": "componentEvent", "component": "Torch", "delegate": "OnJobProgress", "pos": [0, 1620] },
+            { "id": "progress_conv", "kind": "callFunction", "class": "/Script/Engine.KismetTextLibrary", "member": "Conv_StringToText", "pos": [320, 1720] },
+            { "id": "status_progress", "kind": "variableGet", "var": "StatusText", "pos": [320, 1640] },
+            { "id": "progress_set", "kind": "callFunction", "class": "/Script/Engine.TextRenderComponent", "member": "K2_SetText", "pos": [600, 1620] },
+            { "id": "finished", "kind": "componentEvent", "component": "Torch", "delegate": "OnJobFinished", "pos": [0, 1840] },
+            { "id": "finished_concat", "kind": "callFunction", "class": "/Script/Engine.KismetStringLibrary", "member": "Concat_StrStr", "pos": [320, 1940],
+              "defaults": [ { "pin": "B", "value": "    [T] train again   [R] resume" } ] },
+            { "id": "finished_conv", "kind": "callFunction", "class": "/Script/Engine.KismetTextLibrary", "member": "Conv_StringToText", "pos": [600, 1940] },
+            { "id": "status_finished", "kind": "variableGet", "var": "StatusText", "pos": [600, 1860] },
+            { "id": "finished_set", "kind": "callFunction", "class": "/Script/Engine.TextRenderComponent", "member": "K2_SetText", "pos": [880, 1840] },
+            { "id": "failed", "kind": "componentEvent", "component": "Torch", "delegate": "OnJobFailed", "pos": [0, 2060] },
+            { "id": "failed_concat", "kind": "callFunction", "class": "/Script/Engine.KismetStringLibrary", "member": "Concat_StrStr", "pos": [320, 2160],
+              "defaults": [ { "pin": "A", "value": "Training failed: " } ] },
+            { "id": "failed_conv", "kind": "callFunction", "class": "/Script/Engine.KismetTextLibrary", "member": "Conv_StringToText", "pos": [600, 2160] },
+            { "id": "status_failed", "kind": "variableGet", "var": "StatusText", "pos": [600, 2080] },
+            { "id": "failed_set", "kind": "callFunction", "class": "/Script/Engine.TextRenderComponent", "member": "K2_SetText", "pos": [880, 2060] }
+          ],
+          "links": [
+            { "from": "begin:then", "to": "mid:execute" },
+            { "from": "display:Display", "to": "mid:self" },
+            { "from": "mid:then", "to": "settex:execute" },
+            { "from": "mid:ReturnValue", "to": "settex:self" },
+            { "from": "settex:then", "to": "timer_digit:execute" },
+            { "from": "timer_digit:then", "to": "timer_read:execute" },
+            { "from": "timer_read:then", "to": "first_digit:execute" },
+            { "from": "torch_begin:Torch", "to": "first_digit:self" },
+            { "from": "first_digit:then", "to": "train_begin:execute" },
+            { "from": "torch_begin:Torch", "to": "train_begin:self" },
+
+            { "from": "next:then", "to": "run_next:execute" },
+            { "from": "key_n:Pressed", "to": "run_next:execute" },
+            { "from": "torch_next:Torch", "to": "run_next:self" },
+
+            { "from": "read:then", "to": "run_read:execute" },
+            { "from": "torch_read:Torch", "to": "run_read:self" },
+
+            { "from": "key_t:Pressed", "to": "train:execute" },
+            { "from": "key_r:Pressed", "to": "resume:execute" },
+            { "from": "key_s:Pressed", "to": "stop:execute" },
+            { "from": "torch_keys:Torch", "to": "train:self" },
+            { "from": "torch_keys:Torch", "to": "resume:self" },
+            { "from": "torch_keys:Torch", "to": "stop:self" },
+
+            { "from": "result:then", "to": "switch:execute" },
+            { "from": "result:Method", "to": "switch:Selection" },
+            { "from": "switch:sample", "to": "write:execute" },
+            { "from": "result:Result", "to": "write:Result" },
+            { "from": "write:then", "to": "digit_set:execute" },
+            { "from": "result:Result", "to": "digit_str:Result" },
+            { "from": "digit_str:Value", "to": "digit_conv:InString" },
+            { "from": "digit_conv:ReturnValue", "to": "digit_set:Value" },
+            { "from": "digit_text:DigitText", "to": "digit_set:self" },
+            { "from": "switch:read", "to": "pred_set:execute" },
+            { "from": "result:Result", "to": "pred_str:Result" },
+            { "from": "pred_str:Value", "to": "pred_conv:InString" },
+            { "from": "pred_conv:ReturnValue", "to": "pred_set:Value" },
+            { "from": "pred_text:PredictionText", "to": "pred_set:self" },
+
+            { "from": "progress:then", "to": "progress_set:execute" },
+            { "from": "progress:Message", "to": "progress_conv:InString" },
+            { "from": "progress_conv:ReturnValue", "to": "progress_set:Value" },
+            { "from": "status_progress:StatusText", "to": "progress_set:self" },
+            { "from": "finished:then", "to": "finished_set:execute" },
+            { "from": "finished:ResultText", "to": "finished_concat:A" },
+            { "from": "finished_concat:ReturnValue", "to": "finished_conv:InString" },
+            { "from": "finished_conv:ReturnValue", "to": "finished_set:Value" },
+            { "from": "status_finished:StatusText", "to": "finished_set:self" },
+            { "from": "failed:then", "to": "failed_set:execute" },
+            { "from": "failed:Error", "to": "failed_concat:B" },
+            { "from": "failed_concat:ReturnValue", "to": "failed_conv:InString" },
+            { "from": "failed_conv:ReturnValue", "to": "failed_set:Value" },
+            { "from": "status_failed:StatusText", "to": "failed_set:self" }
+          ]
+        }
+      ]
+    },
+    {
+      "package": "/PyTorch/Examples/MnistExample",
+      "create": {
+        "type": "level",
+        "worldSettings": { "DefaultGameMode": "/Script/Engine.GameModeBase" },
+        "actors": [
+          { "class": "/PyTorch/Examples/BP_TorchMnistExample.BP_TorchMnistExample_C", "label": "MnistExample", "location": [0, 0, 0] },
+          { "class": "/Script/Engine.CameraActor", "label": "ExampleCamera", "location": [-640, -20, 170], "rotation": [0, 0, 0],
+            "properties": { "AutoActivateForPlayer": "Player0", "CameraComponent.FieldOfView": 70 } },
+          { "class": "/Script/Engine.DirectionalLight", "label": "Light", "location": [-200, 0, 600], "rotation": [-40, 10, 0],
+            "properties": { "LightComponent.Mobility": "Movable", "LightComponent.Intensity": 4 } },
+          { "class": "/Script/Engine.PlayerStart", "label": "PlayerStart", "location": [-1000, 0, 100] }
+        ]
+      }
+    }
+  ]
+}

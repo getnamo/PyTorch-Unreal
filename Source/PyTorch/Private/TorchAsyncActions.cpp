@@ -1,4 +1,5 @@
 #include "TorchAsyncActions.h"
+#include "PythonJob.h"
 #include "TorchModel.h"
 #include "TorchSubsystem.h"
 
@@ -70,4 +71,68 @@ void UTorchLoadModelAsyncAction::Activate()
 		return;
 	}
 	Torch->LoadModel(Model.Get(), Finish);
+}
+
+UTorchStartJobAsyncAction* UTorchStartJobAsyncAction::StartTorchJob(UTorchModel* InModel, const FString& InJobName, const FString& InParamsJson, bool bInResume, bool bInOwnProcess)
+{
+	UTorchStartJobAsyncAction* Action = NewObject<UTorchStartJobAsyncAction>();
+	Action->Model = InModel;
+	Action->JobName = InJobName;
+	Action->ParamsJson = InParamsJson;
+	Action->bResume = bInResume;
+	Action->bOwnProcess = bInOwnProcess;
+	Action->AddToRoot();
+	return Action;
+}
+
+void UTorchStartJobAsyncAction::Activate()
+{
+	UTorchSubsystem* Torch = UTorchSubsystem::Get();
+	if (!Torch)
+	{
+		Done();
+		return;
+	}
+	Job = Torch->StartJob(Model.Get(), JobName, ParamsJson, bResume, bOwnProcess);
+	Job->OnProgress.AddDynamic(this, &UTorchStartJobAsyncAction::HandleProgress);
+	Job->OnMetrics.AddDynamic(this, &UTorchStartJobAsyncAction::HandleMetrics);
+	Job->OnFinished.AddDynamic(this, &UTorchStartJobAsyncAction::HandleFinished);
+	Job->OnFailed.AddDynamic(this, &UTorchStartJobAsyncAction::HandleFailed);
+	OnStarted.Broadcast(Job);
+	if (Job->State == EPythonJobState::Failed)
+	{
+		OnFailed.Broadcast(Job);
+		Done();
+	}
+}
+
+void UTorchStartJobAsyncAction::HandleProgress(UPythonJob* InJob, float, const FString&)
+{
+	OnProgress.Broadcast(InJob);
+}
+
+void UTorchStartJobAsyncAction::HandleMetrics(UPythonJob* InJob, int32, const FString&)
+{
+	OnMetrics.Broadcast(InJob);
+}
+
+void UTorchStartJobAsyncAction::HandleFinished(UPythonJob* InJob, const FString&)
+{
+	OnCompleted.Broadcast(InJob);
+	Done();
+}
+
+void UTorchStartJobAsyncAction::HandleFailed(UPythonJob* InJob, const FString&, const FString&)
+{
+	OnFailed.Broadcast(InJob);
+	Done();
+}
+
+void UTorchStartJobAsyncAction::Done()
+{
+	if (IsRooted())
+	{
+		RemoveFromRoot();
+	}
+	SetReadyToDestroy();
 }

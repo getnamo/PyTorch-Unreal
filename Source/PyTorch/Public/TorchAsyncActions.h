@@ -63,3 +63,59 @@ public:
 private:
 	TWeakObjectPtr<UTorchModel> Model;
 };
+
+class UPythonJob;
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FTorchJobActionSignature, UPythonJob*, Job);
+
+/** Blueprint: Start Job, with a pin for each stage of the job. */
+UCLASS()
+class PYTORCH_API UTorchStartJobAsyncAction : public UBlueprintAsyncActionBase
+{
+	GENERATED_BODY()
+public:
+	/** Right away, with the job (keep it to Stop it). */
+	UPROPERTY(BlueprintAssignable)
+	FTorchJobActionSignature OnStarted;
+
+	/** Job's Progress / Progress Message changed. */
+	UPROPERTY(BlueprintAssignable)
+	FTorchJobActionSignature OnProgress;
+
+	/** job.metrics(): Job's Last Metrics Json / Get Metric. */
+	UPROPERTY(BlueprintAssignable)
+	FTorchJobActionSignature OnMetrics;
+
+	/** The job returned (State Completed) or ended after Stop (State Stopped): Job's Result Json. */
+	UPROPERTY(BlueprintAssignable)
+	FTorchJobActionSignature OnCompleted;
+
+	/** Job's Error / Traceback. */
+	UPROPERTY(BlueprintAssignable)
+	FTorchJobActionSignature OnFailed;
+
+	/** Start a @ut.job of a Torch Model's script. ParamsJson: a JSON object of its parameters ({"epochs": 2});
+	 Resume continues its latest run; Own Process runs it in a Python process of its own. */
+	UFUNCTION(BlueprintCallable, Category = "Torch", meta = (BlueprintInternalUseOnly = "true", AutoCreateRefTerm = "ParamsJson", DisplayName = "Start Job"))
+	static UTorchStartJobAsyncAction* StartTorchJob(UTorchModel* Model, const FString& JobName, const FString& ParamsJson, bool bResume, bool bOwnProcess);
+
+	virtual void Activate() override;
+
+private:
+	UFUNCTION()
+	void HandleProgress(UPythonJob* InJob, float Progress, const FString& Message);
+	UFUNCTION()
+	void HandleMetrics(UPythonJob* InJob, int32 Step, const FString& MetricsJson);
+	UFUNCTION()
+	void HandleFinished(UPythonJob* InJob, const FString& ResultJson);
+	UFUNCTION()
+	void HandleFailed(UPythonJob* InJob, const FString& Error, const FString& Traceback);
+	void Done();
+
+	TWeakObjectPtr<UTorchModel> Model;
+	FString JobName;
+	FString ParamsJson;
+	bool bResume = false;
+	bool bOwnProcess = false;
+	UPROPERTY()
+	TObjectPtr<UPythonJob> Job;
+};

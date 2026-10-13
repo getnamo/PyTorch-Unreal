@@ -14,12 +14,21 @@
             p = self.net(image).softmax(-1)
             return {"digit": p.argmax(-1), "confidence": p.amax(-1)}   # split back per request
 
+    @ut.job("train_digits")                               # Unreal: Start Job on the Torch Model
+    def train(job: ut.Job, epochs: int = 2):
+        for epoch in job.range(epochs):                   # progress, stop, resume
+            ...
+            job.metrics(epoch=epoch, accuracy=acc)
+            job.checkpoint(net=net, opt=opt)
+            job.publish("digits", net)                    # into the live model
+
 In Unreal: a Torch Model asset (Script, Model Name) and the Run Model node, or UTorchSubsystem::Run in C++.
 One instance per process serves every caller; requests made in the same tick arrive stacked on dim 0.
 """
+from ._jobs import TorchJob as Job, data_dir, job
 from ._model import Model, export, get_model, model, signature
 from ._types import Audio, Image, Tensor
 from . import _weights as weights
 
-__all__ = ["Model", "model", "export", "get_model", "signature", "Tensor", "Image", "Audio", "weights"]
+__all__ = ["Model", "model", "export", "get_model", "signature", "Tensor", "Image", "Audio", "weights", "job", "Job", "data_dir"]
 __version__ = "0.1.0"

@@ -121,6 +121,10 @@ struct PYTORCH_API FTorchJobSpec
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Torch")
 	FString ParamsJson;
 
+	/** "shared" or "dedicated" (@ut.job(process=...)). */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Torch")
+	FString Process;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Torch")
 	FString Doc;
 };

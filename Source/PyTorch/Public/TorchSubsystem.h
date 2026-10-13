@@ -6,6 +6,7 @@
 #include "TorchTypes.h"
 #include "TorchSubsystem.generated.h"
 
+class UPythonJob;
 class UPythonService;
 class UTorchModel;
 
@@ -67,6 +68,16 @@ public:
 	/** Calls, rows, forward passes, largest batch and forward time so far (JSON), optionally resetting them. */
 	void GetStats(UTorchModel* Model, TFunction<void(const FPythonCallResult&)> OnResult, bool bReset = false);
 
+	/** Start a @ut.job of the model's script. ParamsJson: a JSON object of the job's parameters. bResume continues
+	 the job's latest run (Saved/Torch/Runs/<job>/). bOwnProcess runs it in a Python process of its own (also
+	 when the script declares @ut.job(process="dedicated") and the asset's signature is refreshed); its
+	 job.publish() then reaches the model through a weights file. Blueprint: Start Job. */
+	UFUNCTION(BlueprintCallable, Category = "Torch", meta = (AutoCreateRefTerm = "ParamsJson"))
+	UPythonJob* StartJob(UTorchModel* Model, const FString& JobName, const FString& ParamsJson, bool bResume, bool bOwnProcess = false);
+
+	/** Where job runs go: <Project>/Saved/Torch/Runs. */
+	static FString RunsDir();
+
 	UPROPERTY(BlueprintAssignable, Category = "Torch")
 	FTorchModelLoadedSignature OnModelLoaded;
 
@@ -102,6 +113,8 @@ private:
 	void BindService(UPythonService* Service);
 	void ResetStoppedModels();
 	void LoadStartupModels();
+	/** A job in its own process published weights: have the model's process load them. */
+	void ForwardPublish(UTorchModel* Model, const FPythonEventData& Event);
 
 	UFUNCTION()
 	void HandleServiceStopped(const FString& Script);

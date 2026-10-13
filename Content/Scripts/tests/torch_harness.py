@@ -47,6 +47,39 @@ def run(b, model, method, inputs, buffers=(), rows=None, options=None, timeout=6
     return b.call(O, S, "_torch_run", [model, method, inputs, rows or [1], options or {}], list(buffers), timeout=timeout)
 
 
+def examples(b):
+    """examples/digits.py: train briefly (MNIST download on first use), publishing into the live model; resume."""
+    EO, ES = "torch:examples", "examples/digits.py"
+    b.control(cmd="start", owner=EO, script=ES, path=os.path.join(SCRIPTS, "examples", "digits.py"))
+    check("digits example started", b.status("started", EO, ES, timeout=120) is not None)
+    sample = b.call(EO, ES, "_torch_run", ["digits", "sample", {"index": 7}, [1], {}], timeout=300)
+    check("sample: an MNIST test image", sample is not None and sample[1]["ok"] and sample[1]["result"]["outputs"]["label"] == [9], sample and sample[1])
+    img_desc = sample[1]["result"]["outputs"]["image"] if sample and sample[1]["ok"] else None
+    img = H.table_entries(sample[2])[img_desc["_tensor"]] if img_desc else b""
+
+    def read():
+        r = b.call(EO, ES, "_torch_run", ["digits", "read", {"image": {"_tensor": 0, "dtype": "float32", "shape": [1, 256, 256, 1]}}, [1], {}], [img])
+        return r[1]["result"]["outputs"] if r and r[1]["ok"] else {"text": [r and r[1].get("error")]}
+
+    before = read()
+    runs = tempfile.mkdtemp(prefix="torch_runs_")
+    b.clear()
+    t0 = time.time()
+    r = b.call(EO, ES, "_job_start", ["t1", "train_digits", {"epochs": 1, "max_steps": 150}, {"runs_dir": runs}], timeout=60)
+    done = H.job_events(b, "t1", {"completed", "failed", "stopped"}, timeout=600)
+    final = done[-1] if done else {}
+    acc = (final.get("result") or {}).get("accuracy", 0)
+    check("train_digits: one short epoch reaches > 90% test accuracy", r is not None and r[1]["ok"] and final.get("kind") == "completed" and acc > 0.9, (r and r[1], final))
+    print(f"     trained 150 steps in {time.time() - t0:.1f} s (incl. MNIST load): accuracy {acc:.1%}")
+    after = read()
+    check("the live model reads the digit after training (published weights)", after.get("digit") is not None and after["text"][0].startswith("Camera sees: 9"), (before, after))
+    r = b.call(EO, ES, "_job_start", ["t2", "train_digits", {"epochs": 2, "max_steps": 50}, {"runs_dir": runs, "resume": True}], timeout=60)
+    done = H.job_events(b, "t2", {"completed", "failed", "stopped"}, timeout=600)
+    check("resume continues the run (from epoch 2)", r is not None and r[1]["ok"] and r[1]["result"]["resumed"] and done and done[-1]["kind"] == "completed"
+          and len([e for e in done if e["kind"] == "metrics"]) == 1, (r and r[1], done and done[-1]))
+    b.control(cmd="stopOwner", owner=EO)
+
+
 def main():
     project = tempfile.mkdtemp(prefix="torch_harness_")
     b = H.Bridge(site_dirs=site, script_dirs=[SCRIPTS], project_dir=project)
@@ -183,6 +216,9 @@ def main():
     dt = time.perf_counter() - t0
     check("stacked 64-row calls", r is not None and r[1]["ok"])
     print(f"     {n * 64 / dt:.0f} requests/s in 64-row stacked calls ({dt / n * 1000:.2f} ms per call, engine-free)")
+
+    if "--examples" in args:
+        examples(b)
 
     b.control(cmd="exit", grace=500)
     b.status("exiting")

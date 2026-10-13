@@ -9,8 +9,6 @@ PyTorch runs **out of process** in an embedded Python (CPython 3.12) with a per-
 - **Training and RL:** jobs train models while the game uses them; Unreal agents are a Gymnasium environment.
 - **Shipping:** packaged games bundle CPU torch, or ship without Python and run the models' ONNX exports on NNE (DirectML or CPU) behind the same nodes.
 
-Status: **in development** (UE 5.8, Win64; Linux later). Plan: `Notes/PyTorchUnreal-Plan.md` in the development project.
-
 | | |
 |---|---|
 | Python | `import unreal_torch as ut`: `@ut.model` classes with `@ut.export` methods, typed inputs (`ut.Image`, `ut.Tensor`, `ut.Audio`) |

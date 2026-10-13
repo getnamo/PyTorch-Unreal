@@ -217,6 +217,7 @@ class ModelHost:
         self.stream = None
         self.batchers = {}
         self.load_ms = 0.0
+        self.load_error = None  # (time, message) of the last failed load
         self.publishes = 0
         self.stats = {"calls": 0, "rows": 0, "passes": 0, "max_batch": 0, "forward_ms": 0.0}
         self.stats_lock = threading.Lock()
@@ -248,7 +249,14 @@ class ModelHost:
     # -- loading -------------------------------------------------------------------------------------
     def ensure_loaded(self):
         if self.instance is None:
-            self.load()
+            if self.load_error is not None and time.monotonic() - self.load_error[0] < 10.0:
+                # Don't run a failing setup() for every request (or stream frame): once every 10 s at most
+                raise RuntimeError(f"model '{self.name}' failed to load: {self.load_error[1]}")
+            try:
+                self.load()
+            except Exception as e:
+                self.load_error = (time.monotonic(), f"{type(e).__name__}: {e}")
+                raise
         return self.instance
 
     def load(self, overrides=None, state=None):
@@ -548,6 +556,8 @@ def _install_handlers():
     ctx = _bridge.current_context()
     if ctx is None or "_torch_run" in ctx.handlers:
         return
+    from . import _streams
+    ctx.handlers["_torch_stream"] = [_streams.handle_frame]
     for name, fn in (("_torch_load", _torch_load), ("_torch_run", _torch_run), ("_torch_unload", _torch_unload),
                      ("_torch_signature", _torch_signature), ("_torch_list", _torch_list), ("_torch_stats", _torch_stats),
                      ("_torch_load_weights", _torch_load_weights)):
@@ -559,8 +569,13 @@ def _torch_load(name, options=None):
     again after a script restart); other options: reload, keeping the weights."""
     h = host(name)
     wanted = {k: v for k, v in (options or {}).items() if v not in (None, "")}
+    h.load_error = None  # asked explicitly: try again
     if h.instance is None:
-        h.load(wanted)
+        try:
+            h.load(wanted)
+        except Exception as e:
+            h.load_error = (time.monotonic(), f"{type(e).__name__}: {e}")
+            raise
     elif wanted != h.overrides:
         h.load(wanted, state=h.instance.state_dict())
     return {"signature": h.signature(), "device": str(h.device), "load_ms": round(h.load_ms, 1)}

@@ -9,6 +9,7 @@
 class UPythonJob;
 class UPythonService;
 class UTorchModel;
+class UTorchOutputComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FTorchModelLoadedSignature, UTorchModel*, Model, bool, bSuccess, const FString&, Error);
 
@@ -78,6 +79,14 @@ public:
 	/** Where job runs go: <Project>/Saved/Torch/Runs. */
 	static FString RunsDir();
 
+	/** Torch Output Components: their streams' results come back by binding id. */
+	int32 RegisterBinding(UTorchOutputComponent* Component);
+	void UnregisterBinding(int32 Id);
+
+	/** A model reply's outputs for one request: Offset and Rows into the reply's rows; without the batch
+	 dimension unless bBatched. */
+	static FTorchResult MakeResult(const TSharedPtr<FJsonObject>& Reply, const TArray<FPyTensor>& Tensors, int64 Offset, int32 Rows, bool bBatched);
+
 	UPROPERTY(BlueprintAssignable, Category = "Torch")
 	FTorchModelLoadedSignature OnModelLoaded;
 
@@ -115,6 +124,8 @@ private:
 	void LoadStartupModels();
 	/** A job in its own process published weights: have the model's process load them. */
 	void ForwardPublish(UTorchModel* Model, const FPythonEventData& Event);
+	/** A stream frame's result (a Torch Output Component's binding). */
+	void HandleStreamResult(const FPythonEventData& Event);
 
 	UFUNCTION()
 	void HandleServiceStopped(const FString& Script);
@@ -124,6 +135,8 @@ private:
 	TMap<FString, FModelEntry> Models;
 	TMap<FString, TArray<FRequest>> Pending;
 	TArray<TWeakObjectPtr<UPythonService>> BoundServices;
+	TMap<int32, TWeakObjectPtr<UTorchOutputComponent>> Bindings;
+	int32 NextBindingId = 0;
 	FDelegateHandle EndFrameHandle;
 	FDelegateHandle PostEngineInitHandle;
 };

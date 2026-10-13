@@ -90,6 +90,12 @@ void UTorchSettings::ApplyProfile() const
 		: FPaths::ConvertRelativePathToFull(FPaths::ProjectDir() / CompileCacheDirectory);
 	FPythonEnvironment::RegisterEnvironmentVariable(TEXT("TORCHINDUCTOR_CACHE_DIR"), Cache / TEXT("inductor"));
 	FPythonEnvironment::RegisterEnvironmentVariable(TEXT("TRITON_CACHE_DIR"), Cache / TEXT("triton"));
+
+	//Pretrained weights (torchvision, torch.hub) under the project unless the machine has its own TORCH_HOME
+	if (FPlatformMisc::GetEnvironmentVariable(TEXT("TORCH_HOME")).IsEmpty())
+	{
+		FPythonEnvironment::RegisterEnvironmentVariable(TEXT("TORCH_HOME"), FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("Torch/Hub")));
+	}
 }
 
 #if WITH_EDITOR

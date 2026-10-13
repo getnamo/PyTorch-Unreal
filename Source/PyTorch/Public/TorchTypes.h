@@ -165,6 +165,10 @@ struct PYTORCH_API FTorchResult
 	UPROPERTY(BlueprintReadOnly, Category = "Torch")
 	float ModelMs = 0.f;
 
+	/** Stream results: how old the frame was (since capture) when the model got it. */
+	UPROPERTY(BlueprintReadOnly, Category = "Torch")
+	float FrameAgeMs = 0.f;
+
 	/** "python" or the NNE runtime that ran it. */
 	UPROPERTY(BlueprintReadOnly, Category = "Torch")
 	FString Backend;

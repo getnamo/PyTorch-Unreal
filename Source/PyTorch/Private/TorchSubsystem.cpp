@@ -4,6 +4,7 @@
 #include "PythonService.h"
 #include "PythonSubsystem.h"
 #include "TorchModel.h"
+#include "TorchOutputComponent.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Dom/JsonObject.h"
@@ -142,6 +143,7 @@ void UTorchSubsystem::BindService(UPythonService* Service)
 	BoundServices.Add(Service);
 	Service->OnScriptStopped.AddDynamic(this, &UTorchSubsystem::HandleServiceStopped);
 	Service->OnScriptError.AddDynamic(this, &UTorchSubsystem::HandleServiceError);
+	Service->OnNativeEvent(TEXT("_torch_stream_result")).AddUObject(this, &UTorchSubsystem::HandleStreamResult);
 }
 
 void UTorchSubsystem::HandleServiceStopped(const FString&)
@@ -535,69 +537,17 @@ void UTorchSubsystem::SendGroup(UTorchModel* Model, const FString& Method, TArra
 			return;
 		}
 		const TSharedPtr<FJsonObject>* Result = nullptr;
-		const TSharedPtr<FJsonObject>* Outputs = nullptr;
-		if (!R.Result.IsValid() || !R.Result->TryGetObject(Result) || !(*Result)->TryGetObjectField(TEXT("outputs"), Outputs))
+		if (!R.Result.IsValid() || !R.Result->TryGetObject(Result))
 		{
 			Fail(Requests, TEXT("malformed reply from unreal_torch"));
 			return;
 		}
-		TSet<FString> PerRow;
-		const TArray<TSharedPtr<FJsonValue>>* PerRowValues = nullptr;
-		if ((*Result)->TryGetArrayField(TEXT("per_row"), PerRowValues))
-		{
-			for (const TSharedPtr<FJsonValue>& V : *PerRowValues)
-			{
-				PerRow.Add(V->AsString());
-			}
-		}
-		double Batch = 0.0, Ms = 0.0;
-		(*Result)->TryGetNumberField(TEXT("batch"), Batch);
-		(*Result)->TryGetNumberField(TEXT("ms"), Ms);
 		const double Now = FPlatformTime::Seconds();
 		int64 Offset = 0;
 		for (FRequest& Req : Requests)
 		{
-			FTorchResult Out;
-			Out.bSuccess = true;
-			Out.BatchSize = (int32)Batch;
-			Out.ModelMs = (float)Ms;
-			Out.Backend = TEXT("python");
+			FTorchResult Out = MakeResult(*Result, R.Tensors, Offset, Req.Rows, Req.Options.bBatched);
 			Out.LatencyMs = (float)((Now - Req.Start) * 1000.0);
-			TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
-			const bool bBatched = Req.Options.bBatched;
-			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : (*Outputs)->Values)
-			{
-				const bool bRow = PerRow.Contains(Field.Key);
-				const TSharedPtr<FJsonObject>* Desc = nullptr;
-				double Index = -1.0;
-				if (Field.Value->TryGetObject(Desc) && (*Desc)->TryGetNumberField(TEXT("_tensor"), Index) && R.Tensors.IsValidIndex((int32)Index))
-				{
-					const FPyTensor& T = R.Tensors[(int32)Index];
-					Out.Outputs.Add(Field.Key, bRow ? SliceRows(T, Offset, Req.Rows, bBatched) : T);
-					continue;
-				}
-				const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
-				if (bRow && Field.Value->TryGetArray(Values))
-				{
-					if (!bBatched && Req.Rows == 1 && Values->IsValidIndex((int32)Offset))
-					{
-						Json->SetField(Field.Key, (*Values)[(int32)Offset]);
-					}
-					else
-					{
-						TArray<TSharedPtr<FJsonValue>> Part;
-						for (int64 i = Offset; i < Offset + Req.Rows && i < Values->Num(); ++i)
-						{
-							Part.Add((*Values)[(int32)i]);
-						}
-						Json->SetArrayField(Field.Key, Part);
-					}
-					continue;
-				}
-				Json->SetField(Field.Key, Field.Value);
-			}
-			Out.Json = Json;
-			Out.OutputsJson = PythonWire::ToJsonString(MakeShared<FJsonValueObject>(Json));
 			Offset += Req.Rows;
 			if (Req.OnResult)
 			{
@@ -605,6 +555,113 @@ void UTorchSubsystem::SendGroup(UTorchModel* Model, const FString& Method, TArra
 			}
 		}
 	});
+}
+
+FTorchResult UTorchSubsystem::MakeResult(const TSharedPtr<FJsonObject>& Reply, const TArray<FPyTensor>& Tensors, int64 Offset, int32 Rows, bool bBatched)
+{
+	using namespace TorchSubsystemPrivate;
+	FTorchResult Out;
+	Out.Backend = TEXT("python");
+	const TSharedPtr<FJsonObject>* Outputs = nullptr;
+	if (!Reply.IsValid() || !Reply->TryGetObjectField(TEXT("outputs"), Outputs))
+	{
+		Out.Error = TEXT("malformed reply from unreal_torch");
+		return Out;
+	}
+	TSet<FString> PerRow;
+	const TArray<TSharedPtr<FJsonValue>>* PerRowValues = nullptr;
+	if (Reply->TryGetArrayField(TEXT("per_row"), PerRowValues))
+	{
+		for (const TSharedPtr<FJsonValue>& V : *PerRowValues)
+		{
+			PerRow.Add(V->AsString());
+		}
+	}
+	double Batch = 0.0, Ms = 0.0;
+	Reply->TryGetNumberField(TEXT("batch"), Batch);
+	Reply->TryGetNumberField(TEXT("ms"), Ms);
+	Out.bSuccess = true;
+	Out.BatchSize = (int32)Batch;
+	Out.ModelMs = (float)Ms;
+	TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
+	for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : (*Outputs)->Values)
+	{
+		const bool bRow = PerRow.Contains(Field.Key);
+		const TSharedPtr<FJsonObject>* Desc = nullptr;
+		double Index = -1.0;
+		if (Field.Value->TryGetObject(Desc) && (*Desc)->TryGetNumberField(TEXT("_tensor"), Index) && Tensors.IsValidIndex((int32)Index))
+		{
+			const FPyTensor& T = Tensors[(int32)Index];
+			Out.Outputs.Add(Field.Key, bRow ? SliceRows(T, Offset, Rows, bBatched) : T);
+			continue;
+		}
+		const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;
+		if (bRow && Field.Value->TryGetArray(Values))
+		{
+			if (!bBatched && Rows == 1 && Values->IsValidIndex((int32)Offset))
+			{
+				Json->SetField(Field.Key, (*Values)[(int32)Offset]);
+			}
+			else
+			{
+				TArray<TSharedPtr<FJsonValue>> Part;
+				for (int64 i = Offset; i < Offset + Rows && i < Values->Num(); ++i)
+				{
+					Part.Add((*Values)[(int32)i]);
+				}
+				Json->SetArrayField(Field.Key, Part);
+			}
+			continue;
+		}
+		Json->SetField(Field.Key, Field.Value);
+	}
+	Out.Json = Json;
+	Out.OutputsJson = PythonWire::ToJsonString(MakeShared<FJsonValueObject>(Json));
+	return Out;
+}
+
+int32 UTorchSubsystem::RegisterBinding(UTorchOutputComponent* Component)
+{
+	const int32 Id = ++NextBindingId;
+	Bindings.Add(Id, Component);
+	return Id;
+}
+
+void UTorchSubsystem::UnregisterBinding(int32 Id)
+{
+	Bindings.Remove(Id);
+}
+
+void UTorchSubsystem::HandleStreamResult(const FPythonEventData& Event)
+{
+	const TSharedPtr<FJsonObject>* Obj = nullptr;
+	double Binding = 0.0;
+	if (Event.Args.Num() == 0 || !Event.Args[0]->TryGetObject(Obj) || !(*Obj)->TryGetNumberField(TEXT("binding"), Binding))
+	{
+		return;
+	}
+	UTorchOutputComponent* Component = Bindings.FindRef((int32)Binding).Get();
+	if (!Component)
+	{
+		return;
+	}
+	FString Error;
+	if ((*Obj)->TryGetStringField(TEXT("error"), Error))
+	{
+		FTorchResult Failed;
+		Failed.Error = Error;
+		(*Obj)->TryGetStringField(TEXT("traceback"), Failed.Traceback);
+		Failed.Backend = TEXT("python");
+		Component->HandleResult(Failed);
+		return;
+	}
+	FTorchResult Result = MakeResult(*Obj, Event.Tensors, 0, 1, false);
+	double Age = 0.0;
+	if ((*Obj)->TryGetNumberField(TEXT("frame_age_ms"), Age))
+	{
+		Result.FrameAgeMs = (float)Age;
+	}
+	Component->HandleResult(Result);
 }
 
 FString UTorchSubsystem::RunsDir()

@@ -1,0 +1,143 @@
+{
+  "_about": "Generates the vision example content (/PyTorch/Examples) with BlueprintOracle: UnrealEditor-Cmd.exe <Project>.uproject -run=BlueprintOracle -migrate -spec=<this file> [-commit] -unattended -nullrhi -nopause",
+  "assets": [
+    {
+      "package": "/PyTorch/Examples/RT_TorchCamera",
+      "create": { "type": "renderTarget", "properties": { "SizeX": 512, "SizeY": 512, "RenderTargetFormat": "RTF_RGBA8", "ClearColor": "(R=0,G=0,B=0,A=1)" } }
+    },
+    {
+      "package": "/PyTorch/Examples/RT_TorchSegmented",
+      "create": { "type": "renderTarget", "properties": { "SizeX": 512, "SizeY": 512, "RenderTargetFormat": "RTF_RGBA8", "ClearColor": "(R=0,G=0,B=0,A=1)" } }
+    },
+    {
+      "package": "/PyTorch/Examples/DA_ImageNet",
+      "create": { "type": "object", "class": "/Script/PyTorch.TorchModel", "properties": { "Script": "examples/vision.py", "ModelName": "imagenet" } }
+    },
+    {
+      "package": "/PyTorch/Examples/DA_Segmenter",
+      "create": { "type": "object", "class": "/Script/PyTorch.TorchModel", "properties": { "Script": "examples/vision.py", "ModelName": "segmenter" } }
+    },
+    {
+      "package": "/PyTorch/Examples/BP_TorchVisionExample",
+      "create": { "type": "blueprint", "parent": "/Script/Engine.Actor" },
+      "ops": [
+        { "op": "addComponent", "name": "Root", "class": "/Script/Engine.SceneComponent" },
+        { "op": "addComponent", "name": "Capture", "class": "/Script/Engine.SceneCaptureComponent2D", "parent": "Root",
+          "properties": {
+            "TextureTarget": "/PyTorch/Examples/RT_TorchCamera.RT_TorchCamera",
+            "CaptureSource": "SCS_FinalColorLDR",
+            "FOVAngle": 55,
+            "RelativeLocation": "(X=1750,Y=0,Z=110)"
+          } },
+        { "op": "addComponent", "name": "ClassifyStream", "class": "/Script/PythonCLI.PythonRenderTargetStreamComponent",
+          "properties": { "StreamName": "camera", "RenderTarget": "/PyTorch/Examples/RT_TorchCamera.RT_TorchCamera", "CapturesPerSecond": 0, "Policy": "Latest", "Slots": 6 } },
+        { "op": "addComponent", "name": "SegmentStream", "class": "/Script/PythonCLI.PythonRenderTargetStreamComponent",
+          "properties": { "StreamName": "segment", "RenderTarget": "/PyTorch/Examples/RT_TorchCamera.RT_TorchCamera", "CapturesPerSecond": 0, "Policy": "Latest", "Slots": 6 } },
+        { "op": "addComponent", "name": "Classifier", "class": "/Script/PyTorch.TorchOutputComponent",
+          "properties": { "Model": "/PyTorch/Examples/DA_ImageNet.DA_ImageNet", "Method": "classify", "InputName": "image", "StreamComponent": "ClassifyStream" } },
+        { "op": "addComponent", "name": "Segmenter", "class": "/Script/PyTorch.TorchOutputComponent",
+          "properties": { "Model": "/PyTorch/Examples/DA_Segmenter.DA_Segmenter", "Method": "overlay", "InputName": "image", "StreamComponent": "SegmentStream",
+                          "RenderTargetSinks": "((\"image\", \"/PyTorch/Examples/RT_TorchSegmented.RT_TorchSegmented\"))", "bChannelsFirst": false } },
+        { "op": "addComponent", "name": "CameraView", "class": "/Script/Engine.StaticMeshComponent", "parent": "Root",
+          "properties": { "StaticMesh": "/Engine/BasicShapes/Plane.Plane", "RelativeLocation": "(X=0,Y=-140,Z=180)", "RelativeRotation": "(Pitch=0,Yaw=90,Roll=90)",
+                          "RelativeScale3D": "(X=2.5,Y=2.5,Z=1)", "CastShadow": false } },
+        { "op": "addComponent", "name": "SegmentView", "class": "/Script/Engine.StaticMeshComponent", "parent": "Root",
+          "properties": { "StaticMesh": "/Engine/BasicShapes/Plane.Plane", "RelativeLocation": "(X=0,Y=140,Z=180)", "RelativeRotation": "(Pitch=0,Yaw=90,Roll=90)",
+                          "RelativeScale3D": "(X=2.5,Y=2.5,Z=1)", "CastShadow": false } },
+        { "op": "addComponent", "name": "TitleText", "class": "/Script/Engine.TextRenderComponent", "parent": "Root",
+          "properties": { "Text": "INVTEXT(\"PyTorch-Unreal: camera -> models, no scripts\")", "WorldSize": 30, "HorizontalAlignment": "EHTA_Center",
+                          "TextMaterial": "/Engine/EngineMaterials/UnlitText.UnlitText", "TextRenderColor": "(R=238,G=76,B=44,A=255)", "RelativeLocation": "(X=0,Y=0,Z=345)", "RelativeRotation": "(Pitch=0,Yaw=180,Roll=0)" } },
+        { "op": "addComponent", "name": "LabelText", "class": "/Script/Engine.TextRenderComponent", "parent": "Root",
+          "properties": { "Text": "INVTEXT(\"ImageNet: ...\")", "WorldSize": 20, "HorizontalAlignment": "EHTA_Center",
+                          "TextMaterial": "/Engine/EngineMaterials/UnlitText.UnlitText", "TextRenderColor": "(R=120,G=255,B=120,A=255)", "RelativeLocation": "(X=0,Y=-140,Z=30)", "RelativeRotation": "(Pitch=0,Yaw=180,Roll=0)" } },
+        { "op": "addComponent", "name": "ClassesText", "class": "/Script/Engine.TextRenderComponent", "parent": "Root",
+          "properties": { "Text": "INVTEXT(\"Segments: ...\")", "WorldSize": 20, "HorizontalAlignment": "EHTA_Center",
+                          "TextMaterial": "/Engine/EngineMaterials/UnlitText.UnlitText", "TextRenderColor": "(R=120,G=200,B=255,A=255)", "RelativeLocation": "(X=0,Y=140,Z=30)", "RelativeRotation": "(Pitch=0,Yaw=180,Roll=0)" } },
+        { "op": "compile" },
+        { "op": "buildBody", "graph": "EventGraph",
+          "nodes": [
+            { "id": "c_begin", "kind": "comment", "pos": [-40, -80], "size": [1600, 420],
+              "text": "Show the camera and the segmented render targets on the two planes. The models run on their own: Torch Output Components bound to the streams" },
+            { "id": "begin", "kind": "event", "member": "ReceiveBeginPlay", "pos": [0, 0] },
+            { "id": "camview", "kind": "variableGet", "var": "CameraView", "pos": [180, 120] },
+            { "id": "mid1", "kind": "callFunction", "class": "/Script/Engine.PrimitiveComponent", "member": "CreateDynamicMaterialInstance", "pos": [380, 0],
+              "defaults": [ { "pin": "SourceMaterial", "value": "/Engine/EngineMaterials/Widget3DPassThrough_Opaque.Widget3DPassThrough_Opaque" } ] },
+            { "id": "settex1", "kind": "callFunction", "class": "/Script/Engine.MaterialInstanceDynamic", "member": "SetTextureParameterValue", "pos": [760, 0],
+              "defaults": [ { "pin": "ParameterName", "value": "SlateUI" }, { "pin": "Value", "value": "/PyTorch/Examples/RT_TorchCamera.RT_TorchCamera" } ] },
+            { "id": "segview", "kind": "variableGet", "var": "SegmentView", "pos": [900, 220] },
+            { "id": "mid2", "kind": "callFunction", "class": "/Script/Engine.PrimitiveComponent", "member": "CreateDynamicMaterialInstance", "pos": [1080, 0],
+              "defaults": [ { "pin": "SourceMaterial", "value": "/Engine/EngineMaterials/Widget3DPassThrough_Opaque.Widget3DPassThrough_Opaque" } ] },
+            { "id": "settex2", "kind": "callFunction", "class": "/Script/Engine.MaterialInstanceDynamic", "member": "SetTextureParameterValue", "pos": [1360, 0],
+              "defaults": [ { "pin": "ParameterName", "value": "SlateUI" }, { "pin": "Value", "value": "/PyTorch/Examples/RT_TorchSegmented.RT_TorchSegmented" } ] },
+
+            { "id": "c_out", "kind": "comment", "pos": [-40, 380], "size": [1600, 560], "text": "What the models say (On Output): the ImageNet label, the classes the segmenter found" },
+            { "id": "classified", "kind": "componentEvent", "component": "Classifier", "delegate": "OnOutput", "pos": [0, 460] },
+            { "id": "label_str", "kind": "callFunction", "class": "/Script/PyTorch.TorchBlueprintLibrary", "member": "GetOutputString", "pos": [300, 560],
+              "defaults": [ { "pin": "Name", "value": "text" } ] },
+            { "id": "label_concat", "kind": "callFunction", "class": "/Script/Engine.KismetStringLibrary", "member": "Concat_StrStr", "pos": [600, 560],
+              "defaults": [ { "pin": "A", "value": "ImageNet: " } ] },
+            { "id": "label_conv", "kind": "callFunction", "class": "/Script/Engine.KismetTextLibrary", "member": "Conv_StringToText", "pos": [880, 560] },
+            { "id": "label_text", "kind": "variableGet", "var": "LabelText", "pos": [880, 480] },
+            { "id": "label_set", "kind": "callFunction", "class": "/Script/Engine.TextRenderComponent", "member": "K2_SetText", "pos": [1160, 460] },
+            { "id": "segmented", "kind": "componentEvent", "component": "Segmenter", "delegate": "OnOutput", "pos": [0, 720] },
+            { "id": "cls_str", "kind": "callFunction", "class": "/Script/PyTorch.TorchBlueprintLibrary", "member": "GetOutputString", "pos": [300, 820],
+              "defaults": [ { "pin": "Name", "value": "classes" } ] },
+            { "id": "cls_concat", "kind": "callFunction", "class": "/Script/Engine.KismetStringLibrary", "member": "Concat_StrStr", "pos": [600, 820],
+              "defaults": [ { "pin": "A", "value": "Segments: " } ] },
+            { "id": "cls_conv", "kind": "callFunction", "class": "/Script/Engine.KismetTextLibrary", "member": "Conv_StringToText", "pos": [880, 820] },
+            { "id": "cls_text", "kind": "variableGet", "var": "ClassesText", "pos": [880, 740] },
+            { "id": "cls_set", "kind": "callFunction", "class": "/Script/Engine.TextRenderComponent", "member": "K2_SetText", "pos": [1160, 720] }
+          ],
+          "links": [
+            { "from": "begin:then", "to": "mid1:execute" },
+            { "from": "camview:CameraView", "to": "mid1:self" },
+            { "from": "mid1:then", "to": "settex1:execute" },
+            { "from": "mid1:ReturnValue", "to": "settex1:self" },
+            { "from": "settex1:then", "to": "mid2:execute" },
+            { "from": "segview:SegmentView", "to": "mid2:self" },
+            { "from": "mid2:then", "to": "settex2:execute" },
+            { "from": "mid2:ReturnValue", "to": "settex2:self" },
+
+            { "from": "classified:then", "to": "label_set:execute" },
+            { "from": "classified:Result", "to": "label_str:Result" },
+            { "from": "label_str:Value", "to": "label_concat:B" },
+            { "from": "label_concat:ReturnValue", "to": "label_conv:InString" },
+            { "from": "label_conv:ReturnValue", "to": "label_set:Value" },
+            { "from": "label_text:LabelText", "to": "label_set:self" },
+            { "from": "segmented:then", "to": "cls_set:execute" },
+            { "from": "segmented:Result", "to": "cls_str:Result" },
+            { "from": "cls_str:Value", "to": "cls_concat:B" },
+            { "from": "cls_concat:ReturnValue", "to": "cls_conv:InString" },
+            { "from": "cls_conv:ReturnValue", "to": "cls_set:Value" },
+            { "from": "cls_text:ClassesText", "to": "cls_set:self" }
+          ]
+        }
+      ]
+    },
+    {
+      "package": "/PyTorch/Examples/VisionExample",
+      "create": {
+        "type": "level",
+        "worldSettings": { "DefaultGameMode": "/Script/Engine.GameModeBase" },
+        "actors": [
+          { "class": "/PyTorch/Examples/BP_TorchVisionExample.BP_TorchVisionExample_C", "label": "VisionExample", "location": [0, 0, 0] },
+          { "class": "/Script/Engine.CameraActor", "label": "ExampleCamera", "location": [-640, 0, 190], "rotation": [0, 0, 0],
+            "properties": { "AutoActivateForPlayer": "Player0", "CameraComponent.FieldOfView": 70 } },
+          { "class": "/Script/Engine.SkeletalMeshActor", "label": "Mannequin", "location": [2300, 0, 0], "rotation": [0, 90, 0],
+            "properties": { "SkeletalMeshComponent.SkeletalMeshAsset": "/Engine/Tutorial/SubEditors/TutorialAssets/Character/TutorialTPP.TutorialTPP" } },
+          { "class": "/Script/Engine.StaticMeshActor", "label": "Floor", "location": [2300, 0, 0], "scale": [12, 12, 1],
+            "properties": { "StaticMeshComponent.StaticMesh": "/Engine/BasicShapes/Plane.Plane" } },
+          { "class": "/Script/Engine.StaticMeshActor", "label": "Cube", "location": [2400, -160, 50],
+            "properties": { "StaticMeshComponent.StaticMesh": "/Engine/BasicShapes/Cube.Cube" } },
+          { "class": "/Script/Engine.StaticMeshActor", "label": "Sphere", "location": [2400, 170, 50],
+            "properties": { "StaticMeshComponent.StaticMesh": "/Engine/BasicShapes/Sphere.Sphere" } },
+          { "class": "/Script/Engine.DirectionalLight", "label": "Light", "location": [1500, 0, 800], "rotation": [-45, -20, 0],
+            "properties": { "LightComponent.Mobility": "Movable", "LightComponent.Intensity": 5 } },
+          { "class": "/Script/Engine.DirectionalLight", "label": "Fill", "location": [1500, 0, 800], "rotation": [-30, 160, 0],
+            "properties": { "LightComponent.Mobility": "Movable", "LightComponent.Intensity": 2 } },
+          { "class": "/Script/Engine.PlayerStart", "label": "PlayerStart", "location": [-1000, 0, 100] }
+        ]
+      }
+    }
+  ]
+}

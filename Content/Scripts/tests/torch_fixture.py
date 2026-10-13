@@ -50,6 +50,11 @@ class Imager(ut.Model):
     def imagenet(self, image: ut.Image(normalize="imagenet")):
         return image[:, :, 0, 0]
 
+    @ut.export(batch=True)
+    def invert(self, image: ut.Image(normalize=None, alpha=True)):
+        """Image to image: (N, 4, H, W) RGBA, colors inverted."""
+        return {"image": torch.cat([1 - image[:, :3], image[:, 3:]], 1), "mean": image[:, :3].mean((1, 2, 3))}
+
 
 @ut.model("counter", device="cpu")
 class Counter(ut.Model):

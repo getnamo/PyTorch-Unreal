@@ -194,6 +194,22 @@ def main():
     r = b.call(O, S, "_torch_unload", ["counter"])
     check("unload", r is not None and r[1]["ok"], r and r[1])
 
+    # streams bound to model methods: a camera-like stream (latest, shared memory, BGRA) and a Lockstep one
+    b.clear()
+    p = H.Producer(b, O, S, "cam#1", 2, 8 * 8 * 4, policy="latest", shm=True,
+                   info={"call": "_torch_stream", "model": "imager", "method": "gray", "input": "image", "binding": 7, "name": "cam"})
+    p.push(bytes([30, 20, 10, 255] * 64), "uint8", [8, 8, 4], layout="BGRA")
+    ev = b.wait(lambda t, h, x: t == F.EVENT and h.get("name") == "_torch_stream_result", 60)
+    res = ev[1]["args"][0] if ev else {}
+    mean = struct.unpack("<f", H.table_entries(ev[2])[res["outputs"]["mean"]["_tensor"]])[0] if ev and "outputs" in res else None
+    check("camera stream -> model method -> result event (binding, gray mean)", res.get("binding") == 7 and mean is not None and abs(mean - 20 / 255) < 1e-4, res)
+    p.close()
+    q = H.Producer(b, O, S, "agents#1", 1, 64, policy="lockstep", shm=False,
+                   info={"call": "_torch_stream", "model": "doubler", "method": "double", "input": "x", "binding": 8, "name": "agents"})
+    rep = q.step(struct.pack("<3f", 1, 2, 3), "float32", [3], sid=77)
+    check("lockstep stream -> model method -> step reply", rep is not None and rep["ok"] and rep["result"]["outputs"]["output"]["shape"] == [1, 3], rep)
+    q.close()
+
     # torch.compile (triton-windows): a 3-row batch is padded to 4, results match eager
     t0 = time.perf_counter()
     r = b.call(O, S, "_torch_load", ["compiled", {"compile": "default"}], timeout=300)

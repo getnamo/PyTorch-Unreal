@@ -118,9 +118,40 @@ def train(job: ut.Job, epochs: int = 2, lr: float = 2e-3):    # typed parameters
 - **Loading:** **On Model Loaded** fires after the model loads on BeginPlay.
 - **Sharing:** the model itself is still shared by every user.
 
-## Example map
+## Streams into models: cameras, microphones, observations
 
-`/PyTorch/Examples/MnistExample` shows the MNIST model reading test digits drawn into a canvas, while it trains:
+To run a model on every frame of a camera, microphone or observation stream, add a **Torch Output Component** next to a Python stream component. It needs no script and no Blueprint graph.
+
+| Setting | |
+|---|---|
+| Model, Method, Input Name | the exported method each frame goes to (Json Inputs: its other inputs) |
+| Stream Component | which Python stream component on the actor (empty: the first) |
+| Render Target Sinks | image outputs written into render targets after each frame, for image-to-image effects |
+
+- **On Output** (Result) fires for every frame's result. Last Result, Result Count and Get Results Per Second are there too.
+- **Camera (Latest) streams** keep one frame in flight. Frames that arrive meanwhile are skipped, so results never lag behind.
+- **Queue streams** (audio, observations) run every frame.
+- **Lockstep streams** get the method's result as the step's result.
+- **On CUDA**, a stream's shared memory is page-locked once, so frames upload straight from Unreal's slots.
+- **Image outputs:** return uint8 `(H, W, 4)` RGBA for video. It's a quarter of float RGBA and is written to RGBA8 render targets as is.
+- **Launch-bound models:** many small models are, on Windows; `compile="reduce-overhead"` (CUDA graphs) makes them several times faster. MobileNetV3 goes from about 10 ms to 1.6 ms.
+
+## Example maps
+
+### Vision: `/PyTorch/Examples/VisionExample`
+
+![Vision example](Resources/VisionExample.png)
+
+- **Setup:** a scene capture's render target streams to two Torch Output Components; there are no scripts.
+- **Classification:** an ImageNet classifier (MobileNetV3-Large) labels what the camera sees.
+- **Segmentation:** an LR-ASPP segmenter tints each region by its class and writes the result into a second render target.
+- **Speed:** both models are compiled with CUDA graphs. With the editor rendering at the same time, on an RTX 5090: classification about 47 results/s, segmentation about 33/s.
+- **Script:** `examples/vision.py`. Its weights (35 MB) download once into `Saved/Torch/Hub`.
+- **Content:** generated from `Tools/Examples/vision_example.json`.
+
+`examples/audio.py` is the audio counterpart: pitch and loudness of a Python Audio Stream on the GPU, through `ut.Audio`. It's a template for torchaudio models.
+
+### MNIST: `/PyTorch/Examples/MnistExample` shows the MNIST model reading test digits drawn into a canvas, while it trains:
 
 ![MNIST example](Resources/MnistExample.png)
 
@@ -159,11 +190,11 @@ Torch->Run(DigitsModel, TEXT("classify"), { { TEXT("image"), ImageTensor } }, TE
 
 ## Tests
 
-- **Engine-free** (unreal_torch over PythonCLI's protocol, 21 checks; add `--examples` to also train the digits example, 26):
+- **Engine-free** (unreal_torch over PythonCLI's protocol, 23 checks; add `--examples` to also train the digits example, 28):
   `<PythonCLI>/ThirdParty/python/Win64/python.exe -I Content/Scripts/tests/torch_harness.py --site <venv>/Lib/site-packages`
-- **In Unreal** (`PyTorch.Model.*`, `PyTorch.Jobs.*`, `PyTorch.Settings.*`, `PyTorch.Examples.MnistMap`):
+- **In Unreal** (`PyTorch.Model.*`, `PyTorch.Jobs.*`, `PyTorch.Streams.*`, `PyTorch.Settings.*`, `PyTorch.Examples.*`):
   `UnrealEditor-Cmd.exe <Project>.uproject -ExecCmds="Automation RunTests PyTorch; Quit" -unattended -nullrhi -nopause`
-  - The map test plays the example in PIE: it needs `-RenderOffscreen` instead of `-nullrhi`.
+  - The map tests and `PyTorch.Streams.RenderTargetToModel` need a real RHI: `-RenderOffscreen` instead of `-nullrhi`.
   - The job tests download MNIST once.
 - **Benchmarks** (`PyTorch.Benchmarks.*`, the T0 measurements): see [Tools/Benchmarks](Tools/Benchmarks/README.md).
 
@@ -177,3 +208,6 @@ Torch->Run(DigitsModel, TEXT("classify"), { { TEXT("image"), ImageTensor } }, TE
 - **T3, jobs and the MNIST map:** done.
   - Jobs with checkpoints, resume, TensorBoard and publish (in process, or from their own process).
   - Torch Component, Start Job, and the example map.
+- **T4, vision and audio:** done.
+  - Streams bound to model methods (Torch Output Component, render-target sinks, CUDA-pinned stream memory).
+  - Vision and audio examples, and the vision map.

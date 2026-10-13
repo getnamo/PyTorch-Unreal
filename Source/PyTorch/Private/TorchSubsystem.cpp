@@ -9,6 +9,7 @@
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Dom/JsonObject.h"
 #include "Engine/Engine.h"
+#include "HAL/FileManager.h"
 #include "Misc/CoreDelegates.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
@@ -722,7 +723,11 @@ void UTorchSubsystem::ForwardPublish(UTorchModel* Model, const FPythonEventData&
 	}
 	if (ModelName != Model->GetModelName() || GetModelState(Model) == ETorchModelState::NotLoaded)
 	{
-		return; //Not loaded in the game: it picks the weights up when it loads (Saved/Torch/Models)
+		if (FPaths::GetCleanFilename(File).StartsWith(TEXT("published-")))
+		{
+			IFileManager::Get().Delete(*File, false, false, true); //Nobody loads it: the model picks up the job's saved weights when it loads
+		}
+		return;
 	}
 	if (UPythonService* Service = GetService(Model))
 	{

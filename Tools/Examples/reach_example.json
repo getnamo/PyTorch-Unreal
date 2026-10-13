@@ -1,0 +1,61 @@
+{
+  "_about": "Generates the reach (reinforcement learning) example content (/PyTorch/Examples) with BlueprintOracle: UnrealEditor-Cmd.exe <Project>.uproject -run=BlueprintOracle -migrate -spec=<this file> [-commit] -unattended -nullrhi -nopause",
+  "assets": [
+    {
+      "package": "/PyTorch/Examples/DA_ReachPolicy",
+      "create": {
+        "type": "object",
+        "class": "/Script/PyTorch.TorchModel",
+        "properties": { "Script": "examples/reach.py", "ModelName": "reach_policy", "Device": "CPU" }
+      }
+    },
+    {
+      "package": "/PyTorch/Examples/ReachExample",
+      "create": {
+        "type": "level",
+        "worldSettings": { "DefaultGameMode": "/Script/Engine.GameModeBase" },
+        "actors": [
+          {
+            "class": "/Script/PyTorchExamples.TorchReachEnvironment",
+            "label": "ReachEnvironment",
+            "location": [0, 0, 0],
+            "properties": {
+              "Mode": "Train",
+              "NumAgents": 16,
+              "StepsPerTick": 8,
+              "TrainingModel": "/PyTorch/Examples/DA_ReachPolicy.DA_ReachPolicy",
+              "PolicyModel": "/PyTorch/Examples/DA_ReachPolicy.DA_ReachPolicy",
+              "TrainingParamsJson": "{\"target_return\": 1.5, \"total_steps\": 2000000}"
+            }
+          },
+          {
+            "class": "/Script/Engine.CameraActor",
+            "label": "ExampleCamera",
+            "location": [-1800, 0, 2600],
+            "rotation": [-45, 0, 0],
+            "properties": { "AutoActivateForPlayer": "Player0", "CameraComponent.FieldOfView": 70 }
+          },
+          {
+            "class": "/Script/Engine.DirectionalLight",
+            "label": "Light",
+            "location": [1000, 0, 1500],
+            "rotation": [-50, -30, 0],
+            "properties": { "LightComponent.Mobility": "Movable", "LightComponent.Intensity": 5 }
+          },
+          {
+            "class": "/Script/Engine.DirectionalLight",
+            "label": "Fill",
+            "location": [1000, 0, 1500],
+            "rotation": [-40, 150, 0],
+            "properties": { "LightComponent.Mobility": "Movable", "LightComponent.Intensity": 2 }
+          },
+          {
+            "class": "/Script/Engine.PlayerStart",
+            "label": "PlayerStart",
+            "location": [-2000, 0, 100]
+          }
+        ]
+      }
+    }
+  ]
+}

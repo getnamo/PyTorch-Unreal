@@ -8,6 +8,7 @@ Tensor inputs carry a leading batch dimension with sum(rows) rows: Unreal stacks
 entry of `rows` per request. Outputs listed in per_row are split back by rows in Unreal.
 """
 import inspect
+import os
 import queue
 import threading
 import time
@@ -556,8 +557,9 @@ def _install_handlers():
     ctx = _bridge.current_context()
     if ctx is None or "_torch_run" in ctx.handlers:
         return
-    from . import _streams
+    from . import _streams, rl
     ctx.handlers["_torch_stream"] = [_streams.handle_frame]
+    ctx.handlers["_torch_env"] = [rl.handle_frame]
     for name, fn in (("_torch_load", _torch_load), ("_torch_run", _torch_run), ("_torch_unload", _torch_unload),
                      ("_torch_signature", _torch_signature), ("_torch_list", _torch_list), ("_torch_stats", _torch_stats),
                      ("_torch_load_weights", _torch_load_weights)):
@@ -600,12 +602,20 @@ def _torch_signature(name=None):
 
 
 def _torch_load_weights(name, file):
-    """Weights a job in another process published (Saved/Torch/Models/<model>/published.safetensors)."""
+    """Weights a job in another process published (Saved/Torch/Models/<model>/published-<pid>-<n>.safetensors,
+    deleted once loaded)."""
     h = host(name)
-    if h.instance is None:
-        return False
-    h.instance.publish(_weights.load_state(file, h.device))
-    return True
+    try:
+        if h.instance is None:
+            return False
+        h.instance.publish(_weights.load_state(file, h.device))
+        return True
+    finally:
+        if os.path.basename(file).startswith("published-"):
+            try:
+                os.remove(file)
+            except OSError:
+                pass
 
 
 def _torch_list():

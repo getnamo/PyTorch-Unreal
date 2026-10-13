@@ -14,7 +14,7 @@ SCRIPTS = os.path.dirname(HERE)
 PLUGIN = os.path.dirname(os.path.dirname(SCRIPTS))
 args = sys.argv[1:]
 pythoncli = args[args.index("--pythoncli") + 1] if "--pythoncli" in args else os.path.join(os.path.dirname(PLUGIN), "PythonCLI-Unreal")
-site = [args[args.index("--site") + 1]] if "--site" in args else []
+site = [args[i + 1] for i, a in enumerate(args) if a == "--site"]  # several: e.g. the venv and an extra one (gymnasium)
 sys.path.insert(0, os.path.join(pythoncli, "Content", "Python", "tests"))
 import harness as H  # noqa: E402  (PythonCLI's harness: Bridge, check, frames)
 from harness import F, check  # noqa: E402
@@ -45,6 +45,51 @@ def unpack(reply_frame, name):
 
 def run(b, model, method, inputs, buffers=(), rows=None, options=None, timeout=60.0):
     return b.call(O, S, "_torch_run", [model, method, inputs, rows or [1], options or {}], list(buffers), timeout=timeout)
+
+
+def env_step(q, rows, d, meta, sid, timeout=30.0):
+    """One Lockstep step of an ATorchEnvironment-like stream: rows of [obs (d) | final obs (d) | r | term | trunc]."""
+    flat = [v for row in rows for v in row]
+    q.push(struct.pack(f"<{len(flat)}f", *flat), "float32", [len(rows), 2 * d + 3], meta=meta, sid=sid, timeout=timeout)
+    end = time.time() + timeout
+    with q.b.cv:
+        while sid not in q.b.sids:
+            if time.time() >= end:
+                return None
+            q.b.cv.wait(end - time.time())
+        return q.b.sids.pop(sid)
+
+
+def rl_tests(b):
+    """unreal_torch.rl.UnrealVectorEnv over a simulated environment stream: spaces from the spec, steps,
+    SAME_STEP autoreset (final_obs), reset with a seed, close (stop)."""
+    runs = tempfile.mkdtemp(prefix="torch_runs_")
+    b.clear()
+    r = b.call(O, S, "_job_start", ["rl1", "rl_probe", {"steps": 2}, {"runs_dir": runs}], timeout=60)
+    check("rl job started", r is not None and r[1]["ok"], r and r[1])
+    info = {"call": "_torch_env", "env": "Probe", "name": "Probe", "obs_size": 2, "obs_names": ["a", "b"],
+            "action": {"type": "continuous", "size": 1, "n": 2, "low": [-1.0], "high": [1.0]}}
+    q = H.Producer(b, O, S, "env:Probe#1", 1, 2 * 7 * 4, policy="lockstep", shm=False, info=info)
+    z = [0.0, 0.0]
+    r1 = env_step(q, [[1, 2] + z + [0, 0, 0], [3, 4] + z + [0, 0, 0]], 2, {"reset": True, "step": 0}, 101)
+    r2 = env_step(q, [[5, 6] + z + [1, 0, 0], [0, 0, 9, 9, 2, 1, 0]], 2, {"reset": False, "step": 1}, 102)
+    r3 = env_step(q, [[7, 8] + z + [0, 0, 0], [1, 1] + z + [0, 0, 0]], 2, {"reset": False, "step": 2}, 103)
+    r4 = env_step(q, [[0, 0] + z + [0, 0, 0], [1, 1] + z + [0, 0, 0]], 2, {"reset": True, "step": 3}, 104)
+    acts = r1 and r1["ok"] and r1["result"]["actions"]
+    check("step reply: actions (N, A) float32", bool(acts) and acts["shape"] == [2, 1] and acts["dtype"] == "float32", r1)
+    check("reset(seed) asks Unreal for a reseeded reset", r3 is not None and r3["ok"] and r3["result"].get("reset") is True and r3["result"].get("seed") == 5, r3)
+    check("close answers the pending step with stop", r4 is not None and r4["ok"] and r4["result"].get("stop") is True, r4)
+    done = H.job_events(b, "rl1", {"completed", "failed", "stopped"}, timeout=60)
+    res = (done[-1].get("result") or {}) if done else {}
+    print(f"     gymnasium: {res.get('gymnasium')}, action space {res.get('action_space')}")
+    check("env: spec -> spaces (2 envs, obs 2, Box action, batched (2, 1))", done and done[-1]["kind"] == "completed" and res.get("num_envs") == 2
+          and res.get("obs_size") == 2 and res.get("batched_action_shape") == [2, 1] and "Box" in res.get("action_space", ""), done and done[-1])
+    check("env: first obs, rewards, dones", res.get("first_obs") == [[1, 2], [3, 4]] and res.get("rewards") == [[1, 2], [0, 0]]
+          and res.get("dones") == [[False, True], [False, False]], res)
+    check("env: SAME_STEP autoreset (new episode's obs, final_obs in info)", res.get("finals") == [[None, [9, 9]]], res)
+    check("env: reset(seed) returns the reset frame's obs", res.get("reset_obs") == [[0, 0], [1, 1]], res)
+    q.close()
+    shutil.rmtree(runs, ignore_errors=True)
 
 
 def examples(b):
@@ -232,6 +277,8 @@ def main():
     dt = time.perf_counter() - t0
     check("stacked 64-row calls", r is not None and r[1]["ok"])
     print(f"     {n * 64 / dt:.0f} requests/s in 64-row stacked calls ({dt / n * 1000:.2f} ms per call, engine-free)")
+
+    rl_tests(b)
 
     if "--examples" in args:
         examples(b)

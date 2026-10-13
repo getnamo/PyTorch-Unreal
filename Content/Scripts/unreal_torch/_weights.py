@@ -1,6 +1,7 @@
 """Weights on disk: safetensors (default) or .pt, found under Saved/Torch/Models/<model>/ first, then
 Content/Models/, or downloaded from the Hugging Face Hub ("hf://org/repo/file.safetensors")."""
 import os
+import time
 
 import torch
 import unreal_bridge as ue
@@ -40,8 +41,12 @@ def resolve(path, model_name=None, for_write=False):
 
 def load_state(file, device="cpu"):
     if file.endswith(".safetensors"):
-        from safetensors.torch import load_file
-        return load_file(file, device=str(device))
+        # Copies, not views of a memory-mapped file: on Windows a mapped file can't be replaced, and another
+        # process (a training job) may be about to save over it
+        from safetensors import safe_open
+        cpu = torch.device(device).type == "cpu"
+        with safe_open(file, framework="pt", device=str(device)) as f:
+            return {k: (f.get_tensor(k).clone() if cpu else f.get_tensor(k)) for k in f.keys()}
     state = torch.load(file, map_location=device, weights_only=True)
     if isinstance(state, dict) and "state_dict" in state and isinstance(state["state_dict"], dict):
         state = state["state_dict"]
@@ -55,5 +60,12 @@ def save_state(state, file):
         save_file({k: v.detach().contiguous().cpu() for k, v in state.items()}, tmp)
     else:
         torch.save({k: v.detach().cpu() for k, v in state.items()}, tmp)
-    os.replace(tmp, file)
+    for attempt in range(40):  # Windows: a reader (another process) may have the file open for a moment
+        try:
+            os.replace(tmp, file)
+            break
+        except PermissionError:
+            if attempt == 39:
+                raise
+            time.sleep(0.05)
     return file

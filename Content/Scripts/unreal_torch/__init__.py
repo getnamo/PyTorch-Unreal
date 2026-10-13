@@ -29,6 +29,8 @@ from ._jobs import TorchJob as Job, data_dir, job
 from ._model import Model, export, get_model, model, signature
 from ._types import Audio, Image, Tensor
 from . import _weights as weights
+from . import data, rl
 
-__all__ = ["Model", "model", "export", "get_model", "signature", "Tensor", "Image", "Audio", "weights", "job", "Job", "data_dir"]
+__all__ = ["Model", "model", "export", "get_model", "signature", "Tensor", "Image", "Audio", "weights", "job", "Job", "data_dir",
+           "data", "rl"]
 __version__ = "0.1.0"

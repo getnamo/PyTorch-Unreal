@@ -107,7 +107,7 @@ def train(job: ut.Job, epochs: int = 2, lr: float = 2e-3):    # typed parameters
 - **Runs:** each start makes `Saved/Torch/Runs/<job>/<timestamp>/` with `config.json`, `metrics.jsonl`, `state.json`, `checkpoint.pt` and `result.json`.
   - **Resume** continues the latest run: `job.range` picks up after the last finished step, and `job.restore` loads the checkpoint.
 - **Messages:** `job.progress(message="...")` sends a status line to Unreal, keeping the progress fraction.
-- **Own Process** (or `@ut.job(process="dedicated")`): the job runs in a Python process of its own, so training never shares the GIL with inference. `job.publish()` then writes `Saved/Torch/Models/<model>/published.safetensors`, and Unreal has the model's process load it.
+- **Own Process** (or `@ut.job(process="dedicated")`): the job runs in a Python process of its own, so training never shares the GIL with inference. `job.publish()` then writes a weights file per publish (`Saved/Torch/Models/<model>/published-*.safetensors`); Unreal has the model's process load it, and it is deleted once loaded.
 - **Data:** `ut.data_dir("name")` is `Saved/Torch/Data/<name>`, for datasets (torchvision downloads, recordings).
 
 ## Torch Component
@@ -136,6 +136,35 @@ To run a model on every frame of a camera, microphone or observation stream, add
 - **Image outputs:** return uint8 `(H, W, 4)` RGBA for video. It's a quarter of float RGBA and is written to RGBA8 render targets as is.
 - **Launch-bound models:** many small models are, on Windows; `compile="reduce-overhead"` (CUDA graphs) makes them several times faster. MobileNetV3 goes from about 10 ms to 1.6 ms.
 
+## Reinforcement learning
+
+Unreal agents are a Gymnasium vector environment for any Python RL code: CleanRL-style loops, Stable-Baselines3 (`rl.sb3(env)`), PettingZoo (`rl.parallel(env)`). The environment steps in lockstep with the trainer.
+
+| | |
+|---|---|
+| **Torch Environment** (actor) | the spec (named observation blocks, continuous or discrete actions), the mode, Steps Per Tick, Step Seconds, Max Episode Steps, Seed; the training job and the policy model |
+| **Torch Agent Component** | one per agent: **On Collect Observations** (Set Observation / Vector / Observations), **On Apply Actions**, **On Reset Agent**, **On Heuristic**; Add Reward, End Episode (terminated or truncated), Random Range (the environment's seeded stream). C++ agents override the same functions. |
+
+```python
+from unreal_torch.rl import UnrealVectorEnv
+
+@ut.job("train_reach", process="dedicated")
+def train(job, total_steps: int = 500_000):
+    env = UnrealVectorEnv("Reach", job=job)           # one sub-environment per agent; spaces from Unreal's spec
+    obs, info = env.reset(seed=0)                     # reseeds Unreal's random stream and resets every agent
+    while ...:
+        obs, rewards, terminated, truncated, info = env.step(actions)   # SAME_STEP autoreset: info["final_obs"]
+        job.publish("reach_policy", actor)            # the game's Run mode uses the new weights
+```
+
+- **Modes:**
+  - **Train:** the training job starts on BeginPlay (in its own process by default). Each decision step sends every agent's observation, reward and done flags as one shared-memory frame and waits for the actions. When the job closes its env, the environment switches to Mode After Training (Run).
+  - **Run:** the Policy Model's method (`act` by default) acts, stacked into one batched call per step. It's turn-based, so a run with the same seed replays exactly (Reset With Seed).
+  - **Heuristic:** On Heuristic chooses the actions (player input, a scripted expert).
+  - **Record:** Heuristic, writing every transition (obs, actions, rewards, terminated, truncated, next_obs, agent) as safetensors shards to `Saved/Torch/Recordings/<name>/<session>/`. Python reads them as `ut.data.Recording(name)`, a torch Dataset of (obs, actions) with `episodes()` and `transitions()`.
+- **Time:** steps advance in fixed simulated time (Step Seconds), not frame time. Kinematic agents can take many steps per tick, so training runs faster than real time.
+- **Gymnasium** is optional: without it (Project Settings > Plugins > PyTorch > Gymnasium) the env has minimal Box / Discrete spaces of its own.
+
 ## Example maps
 
 ### Vision: `/PyTorch/Examples/VisionExample`
@@ -150,6 +179,15 @@ To run a model on every frame of a camera, microphone or observation stream, add
 - **Content:** generated from `Tools/Examples/vision_example.json`.
 
 `examples/audio.py` is the audio counterpart: pitch and loudness of a Python Audio Stream on the GPU, through `ut.Audio`. It's a template for torchaudio models.
+
+### Reach (reinforcement learning): `/PyTorch/Examples/ReachExample`
+
+![Reach example](Resources/ReachExample.png)
+
+- **The task:** 16 agents (orange) move on their arenas to their targets (green): 4 observations (the offset to the target, the velocity), 2 continuous actions (a velocity command). C++ classes in the PyTorchExamples module: `ATorchReachEnvironment`, `UTorchReachAgentComponent`.
+- **On BeginPlay** PPO (`train_reach`, CleanRL's recipe, on the CPU in its own process) trains until the mean return reaches 1.5. That takes about 10 s; the policy is published as it learns, then the environment hands over to it (Run).
+- **Keys:** **T** trains again, **R** runs the policy, **H** shows the scripted expert, **C** records it, **B** clones it (`train_reach_bc`, behavior cloning on the latest recording), **1** / **2** replay a seed.
+- **Script:** `examples/reach.py` (the `reach_policy` model, both jobs). Content: `Tools/Examples/reach_example.json`.
 
 ### MNIST: `/PyTorch/Examples/MnistExample` shows the MNIST model reading test digits drawn into a canvas, while it trains:
 
@@ -190,9 +228,10 @@ Torch->Run(DigitsModel, TEXT("classify"), { { TEXT("image"), ImageTensor } }, TE
 
 ## Tests
 
-- **Engine-free** (unreal_torch over PythonCLI's protocol, 23 checks; add `--examples` to also train the digits example, 28):
+- **Engine-free** (unreal_torch over PythonCLI's protocol, 31 checks; add `--examples` to also train the digits example, 36):
   `<PythonCLI>/ThirdParty/python/Win64/python.exe -I Content/Scripts/tests/torch_harness.py --site <venv>/Lib/site-packages`
-- **In Unreal** (`PyTorch.Model.*`, `PyTorch.Jobs.*`, `PyTorch.Streams.*`, `PyTorch.Settings.*`, `PyTorch.Examples.*`):
+  - A second `--site` adds a folder, e.g. one with gymnasium, to test the env with it.
+- **In Unreal** (`PyTorch.Model.*`, `PyTorch.Jobs.*`, `PyTorch.Streams.*`, `PyTorch.RL.*`, `PyTorch.Settings.*`, `PyTorch.Examples.*`):
   `UnrealEditor-Cmd.exe <Project>.uproject -ExecCmds="Automation RunTests PyTorch; Quit" -unattended -nullrhi -nopause`
   - The map tests and `PyTorch.Streams.RenderTargetToModel` need a real RHI: `-RenderOffscreen` instead of `-nullrhi`.
   - The job tests download MNIST once.
@@ -211,3 +250,7 @@ Torch->Run(DigitsModel, TEXT("classify"), { { TEXT("image"), ImageTensor } }, TE
 - **T4, vision and audio:** done.
   - Streams bound to model methods (Torch Output Component, render-target sinks, CUDA-pinned stream memory).
   - Vision and audio examples, and the vision map.
+- **T5, reinforcement learning:** done.
+  - Torch Environment and Torch Agent Component; `UnrealVectorEnv` (Gymnasium, optional), SB3 and PettingZoo adapters; recording and `ut.data.Recording`.
+  - The reach example: PPO reaches the target return in seconds, the same seed replays exactly, and behavior cloning matches the scripted expert.
+  - Not done: a TorchRL adapter (TorchRL wraps Gymnasium vector envs itself) and Minari export of recordings.

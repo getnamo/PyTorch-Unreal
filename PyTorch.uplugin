@@ -21,6 +21,12 @@
 			"Type": "Runtime",
 			"LoadingPhase": "Default",
 			"PlatformAllowList": [ "Win64", "Linux" ]
+		},
+		{
+			"Name": "PyTorchExamples",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64", "Linux" ]
 		}
 	],
 	"Plugins": [

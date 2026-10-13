@@ -17,6 +17,7 @@ TensorBoard and publishing weights into live models.
 """
 import functools
 import os
+import time
 
 import torch
 import unreal_bridge as ue
@@ -46,6 +47,7 @@ class TorchJob:
         self._options = options
         self._writer = None
         self._tb_checked = False
+        self._published = 0
 
     def __getattr__(self, name):
         return getattr(self._job, name)
@@ -119,15 +121,33 @@ class TorchJob:
             state = {f"{attr}.{k}": v for k, v in source.state_dict().items()}
         else:
             state = source
-        file = _weights.resolve("published.safetensors", model_name, for_write=True)
+        # A file per publish (the game's process loads it, then deletes it): a publish never overwrites one
+        # that is being read
+        self._published += 1
+        file = _weights.resolve(f"published-{os.getpid()}-{self._published}.safetensors", model_name, for_write=True)
         _weights.save_state(state, file)
+        _remove_stale_publishes(os.path.dirname(file), keep=file)
         ctx = _bridge.current_context()
         ctx.host.emit(ctx, "_torch_publish", [{"model": model_name, "file": file}])
 
     def close(self):
+        from . import rl
+        rl._close_thread_envs()
         if self._writer is not None:
             self._writer.close()
             self._writer = None
+
+
+def _remove_stale_publishes(folder, keep, age=60.0):
+    """Published weights nobody loaded (the model wasn't loaded in the game) after a minute."""
+    now = time.time()
+    for name in os.listdir(folder):
+        path = os.path.join(folder, name)
+        if name.startswith("published-") and path != keep and now - os.path.getmtime(path) > age:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def job(name=None, **options):
@@ -144,6 +164,7 @@ def job(name=None, **options):
             finally:
                 tj.close()
         run.__ut_job_options__ = dict(options)
+        _model._install_handlers()  # a script with only jobs still answers the reserved calls (e.g. _torch_env)
         ue.job(job_name or fn.__name__)(run)
         return fn
     if callable(name):

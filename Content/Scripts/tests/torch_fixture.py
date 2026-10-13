@@ -113,3 +113,25 @@ class Compiled(ut.Model):
     @ut.export
     def reference(self, x: ut.Tensor(shape=(4,))):
         return self.net._orig_mod(x) if hasattr(self.net, "_orig_mod") else self.net(x)
+
+
+@ut.job("rl_probe")
+def rl_probe(job, steps: int = 2):
+    """An UnrealVectorEnv("Probe") driven by the harness's frames: what the env saw, for the checks."""
+    import numpy as np
+    from unreal_torch import rl
+    env = rl.UnrealVectorEnv("Probe", timeout=30, job=job)
+    obs, _ = env.reset()
+    seen = {"num_envs": env.num_envs, "obs_size": env.obs_size, "action_space": repr(env.single_action_space),
+            "batched_action_shape": list(env.action_space.shape), "gymnasium": rl._gym is not None, "first_obs": obs.tolist()}
+    rewards, finals, dones = [], [], []
+    for _ in range(steps):
+        obs, r, term, trunc, info = env.step(np.full((env.num_envs, env.action_size), 0.5, np.float32))
+        rewards.append(r.tolist())
+        dones.append([bool(t) for t in term | trunc])
+        if "final_obs" in info:
+            finals.append([None if x is None else x.tolist() for x in info["final_obs"]])
+    obs, _ = env.reset(seed=5)
+    seen.update(rewards=rewards, dones=dones, finals=finals, reset_obs=obs.tolist())
+    env.close()
+    return seen

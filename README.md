@@ -1,2 +1,2 @@
-# Pytorch-Unreal
-Pytorch ML support via PythonCLI plugin for the Unreal Engine
+# PyTorch-Unreal
+PyTorch ML support via PythonCLI plugin for the Unreal Engine

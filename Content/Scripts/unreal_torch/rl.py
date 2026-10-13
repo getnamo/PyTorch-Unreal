@@ -218,11 +218,21 @@ class UnrealVectorEnv(_VectorEnv):
     # -- the lockstep ----------------------------------------------------------------------------------
     def _next_frame(self, initial=False):
         deadline = time.monotonic() + self.timeout
+        # Poll first: on Windows a timed queue wait wakes in ~15 ms steps, which caps environments whose step takes
+        # Unreal a millisecond or two (physics) at ~60 steps/s. Then wait, for steps that take long (or never come)
+        poll_until = time.perf_counter() + 0.05
         while True:
             if self.job is not None and self.job.should_stop:
                 raise EnvClosed(f"the job is stopping")
             try:
-                frame = self._chan.get(timeout=0.25)
+                if time.perf_counter() < poll_until:
+                    try:
+                        frame = self._chan.get_nowait()
+                    except queue.Empty:
+                        time.sleep(0.0002)
+                        continue
+                else:
+                    frame = self._chan.get(timeout=0.25)
             except queue.Empty:
                 if time.monotonic() > deadline:
                     raise EnvClosed(f"no step from Unreal's environment '{self.name}' within {self.timeout:.0f} s"

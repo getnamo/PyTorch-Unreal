@@ -513,6 +513,13 @@ bool ATorchEnvironment::StepRun()
 			Out = R.Outputs.Find(TEXT("output"));
 		}
 		Self->RunActions = Out ? Out->ToFloats() : TArray<float>();
+		if (Self->bAgentsMoveWithWorld)
+		{
+			//Now, before the world ticks on: the next step collects what these actions did
+			Self->Apply(Self->RunActions);
+			++Self->TotalSteps;
+			return;
+		}
 		Self->bRunActionsReady = true;
 	}, Options);
 	return true;

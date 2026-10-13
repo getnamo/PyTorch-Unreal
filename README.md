@@ -163,6 +163,10 @@ def train(job, total_steps: int = 500_000):
   - **Heuristic:** On Heuristic chooses the actions (player input, a scripted expert).
   - **Record:** Heuristic, writing every transition (obs, actions, rewards, terminated, truncated, next_obs, agent) as safetensors shards to `Saved/Torch/Recordings/<name>/<session>/`. Python reads them as `ut.data.Recording(name)`, a torch Dataset of (obs, actions) with `episodes()` and `transitions()`.
 - **Time:** steps advance in fixed simulated time (Step Seconds), not frame time. Kinematic agents can take many steps per tick, so training runs faster than real time.
+- **Physics agents** (bodies and motors that move with the world's tick, not inside Apply Actions): set **Agents Move With World**.
+  - Run mode then applies the policy's actions as soon as they arrive. The next step only collects, so every observation follows a step of the world under the last actions, as in training.
+  - Without it, an observation would be taken before the last actions had any effect: the policy would act a step late.
+  - Chaos only simulates in a world the engine ticks (PIE, a game): train physics agents there, with a fixed time step to run faster than real time.
 - **Gymnasium** is optional: without it (Project Settings > Plugins > PyTorch > Gymnasium) the env has minimal Box / Discrete spaces of its own.
 
 ## Shipping: NNE without Python

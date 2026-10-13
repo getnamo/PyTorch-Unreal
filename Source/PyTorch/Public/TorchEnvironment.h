@@ -121,6 +121,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Environment", meta = (ClampMin = "0"))
 	int32 MaxEpisodeSteps = 500;
 
+	/** The agents move with the world's tick (physics bodies, motors) rather than inside Apply Actions. Run then
+	 applies the policy's actions as soon as they arrive and the next step only collects, so each observation follows
+	 a step of the world under the last actions, as in training. (Otherwise Run applies the last actions and collects
+	 at once, which suits agents that simulate in Apply Actions; agents that move with the world would act a step
+	 late.) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Environment")
+	bool bAgentsMoveWithWorld = false;
+
 	/** Seeds the agents' random stream (Random Range) at the start and on resets Python asks for. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Environment")
 	int32 Seed = 0;
@@ -200,6 +208,10 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Environment")
 	UPythonJob* GetTrainingJob() const { return TrainingJobHandle; }
+
+	/** Run: a policy request is on its way (Step Environment does nothing until its actions are back). */
+	UFUNCTION(BlueprintPure, Category = "Environment")
+	bool IsWaitingForActions() const { return bRunPending; }
 
 	/** Flush the current recording shard to disk (Record mode; also on EndPlay). */
 	UFUNCTION(BlueprintCallable, Category = "Environment")

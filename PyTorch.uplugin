@@ -1,0 +1,40 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "PyTorch",
+	"Description": "PyTorch from Blueprints and C++: models and training jobs run out of process in an embedded Python with a per-project venv (PythonCLI). Batched GPU inference, live weight updates, Gymnasium environments, and ONNX export to NNE for shipping.",
+	"Category": "Computing",
+	"CreatedBy": "Getnamo",
+	"CreatedByURL": "http://www.getnamo.com",
+	"DocsURL": "https://github.com/getnamo/pytorch-unreal",
+	"MarketplaceURL": "",
+	"SupportURL": "https://github.com/getnamo/pytorch-unreal/issues",
+	"EngineVersion": "5.8.0",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "PyTorch",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"PlatformAllowList": [ "Win64", "Linux" ]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "CLISystem",
+			"Enabled": true
+		},
+		{
+			"Name": "PythonCLI",
+			"Enabled": true
+		},
+		{
+			"Name": "NNERuntimeORT",
+			"Enabled": true
+		}
+	]
+}

@@ -1,0 +1,4 @@
+# Packaged builds (Packaged Profile: CPU): CPU torch, without the editor's CUDA build.
+torch==2.14.*
+numpy
+safetensors

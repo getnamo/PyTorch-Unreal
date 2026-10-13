@@ -1,0 +1,6 @@
+# PyTorch-Unreal: torch (the build comes from the profile's torch backend) and what unreal_torch needs.
+torch==2.14.*
+numpy
+safetensors
+# torch.compile on CUDA under Windows: the community triton build, pinned to the torch minor version
+triton-windows==3.8.*; sys_platform == "win32"

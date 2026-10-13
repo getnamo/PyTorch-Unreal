@@ -1,0 +1,2 @@
+gymnasium>=1.4,<2
+pettingzoo>=1.27,<2

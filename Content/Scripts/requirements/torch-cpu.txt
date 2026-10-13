@@ -1,0 +1,4 @@
+# PyTorch-Unreal: CPU torch and what unreal_torch needs.
+torch==2.14.*
+numpy
+safetensors

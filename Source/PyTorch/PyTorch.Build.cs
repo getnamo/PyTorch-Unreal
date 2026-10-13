@@ -21,6 +21,7 @@ public class PyTorch : ModuleRules
 		{
 			"Projects",
 			"Json",
+			"AssetRegistry",
 			"RenderCore",
 			"RHI",
 		});

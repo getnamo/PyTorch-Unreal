@@ -16,6 +16,9 @@
 #include "Dom/JsonObject.h"
 #include "Misc/Paths.h"
 
+// The tests are in a namespace of their own: a file-scope using-directive would leak into the other files of a unity build.
+namespace TorchJobTestsSuite
+{
 using namespace TorchTests;
 
 namespace TorchJobTests
@@ -172,5 +175,7 @@ bool FTorchJobOwnProcessTest::RunTest(const FString&)
 	});
 	return true;
 }
+
+} // namespace TorchJobTestsSuite
 
 #endif

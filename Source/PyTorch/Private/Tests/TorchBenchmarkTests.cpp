@@ -23,6 +23,9 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 
+// The tests are in a namespace of their own: a file-scope using-directive would leak into the other files of a unity build.
+namespace TorchBenchmarkTestsSuite
+{
 using namespace TorchTests;
 
 namespace TorchBenchmarks
@@ -414,5 +417,7 @@ bool FTorchBenchNNE::RunTest(const FString&)
 	Step([S] { S->Env.Destroy(); });
 	return true;
 }
+
+} // namespace TorchBenchmarkTestsSuite
 
 #endif

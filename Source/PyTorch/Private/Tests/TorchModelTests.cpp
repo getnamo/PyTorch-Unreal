@@ -18,6 +18,9 @@
 #include "TorchTestReceiver.h"
 #include "Dom/JsonObject.h"
 
+// The tests are in a namespace of their own: a file-scope using-directive would leak into the other files of a unity build.
+namespace TorchModelTestsSuite
+{
 using namespace TorchTests;
 
 namespace TorchModelTests
@@ -310,5 +313,7 @@ bool FTorchSettingsTest::RunTest(const FString&)
 	TestTrue(TEXT("compile caches in the project"), Env.Contains(TEXT("TORCHINDUCTOR_CACHE_DIR")) && Env.Contains(TEXT("TRITON_CACHE_DIR")));
 	return true;
 }
+
+} // namespace TorchModelTestsSuite
 
 #endif

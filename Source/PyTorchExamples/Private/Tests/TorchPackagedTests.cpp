@@ -17,6 +17,9 @@
 #include "TorchSubsystem.h"
 #include "TorchTestHelpers.h"
 
+// The tests are in a namespace of their own: a file-scope using-directive would leak into the other files of a unity build.
+namespace TorchPackagedTestsSuite
+{
 using namespace TorchTests;
 
 namespace TorchPackagedTests
@@ -200,5 +203,7 @@ bool FTorchExportExamplesTool::RunTest(const FString&)
 	return true;
 }
 #endif
+
+} // namespace TorchPackagedTestsSuite
 
 #endif

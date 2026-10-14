@@ -21,6 +21,9 @@
 #include "Misc/App.h"
 #include "RenderingThread.h"
 
+// The tests are in a namespace of their own: a file-scope using-directive would leak into the other files of a unity build.
+namespace TorchStreamTestsSuite
+{
 using namespace TorchTests;
 
 namespace TorchStreamTests
@@ -206,5 +209,7 @@ bool FTorchStreamRenderTargetTest::RunTest(const FString&)
 	});
 	return true;
 }
+
+} // namespace TorchStreamTestsSuite
 
 #endif

@@ -14,10 +14,10 @@ void UTorchAgentComponent::BeginPlay()
 	Super::BeginPlay();
 	if (!Environment && GetWorld())
 	{
-		for (TActorIterator<ATorchEnvironment> It(GetWorld()); It; ++It)
+		TActorIterator<ATorchEnvironment> It(GetWorld());
+		if (It)
 		{
 			Environment = *It;
-			break;
 		}
 	}
 	if (Environment)

@@ -84,7 +84,7 @@ void UTorchModel::ApplySignature(const TSharedPtr<FJsonObject>& Signature, const
 							}
 						}
 						TSharedRef<FJsonObject> Details = MakeShared<FJsonObject>();
-						for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : I->Values)
+						for (const auto& Field : I->Values)
 						{
 							if (Field.Key != TEXT("name") && Field.Key != TEXT("kind") && Field.Key != TEXT("required") && Field.Key != TEXT("dtype")
 								&& Field.Key != TEXT("type") && Field.Key != TEXT("shape") && Field.Key != TEXT("size"))

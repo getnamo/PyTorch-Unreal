@@ -733,15 +733,15 @@ FTorchResult UTorchSubsystem::MakeResult(const TSharedPtr<FJsonObject>& Reply, c
 	Out.BatchSize = (int32)Batch;
 	Out.ModelMs = (float)Ms;
 	TSharedRef<FJsonObject> Json = MakeShared<FJsonObject>();
-	for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : (*Outputs)->Values)
+	for (const auto& Field : (*Outputs)->Values)
 	{
-		const bool bRow = PerRow.Contains(Field.Key);
+		const bool bRow = PerRow.Contains(FString(Field.Key));
 		const TSharedPtr<FJsonObject>* Desc = nullptr;
 		double Index = -1.0;
 		if (Field.Value->TryGetObject(Desc) && (*Desc)->TryGetNumberField(TEXT("_tensor"), Index) && Tensors.IsValidIndex((int32)Index))
 		{
 			const FPyTensor& T = Tensors[(int32)Index];
-			Out.Outputs.Add(Field.Key, bRow ? SliceRows(T, Offset, Rows, bBatched) : T);
+			Out.Outputs.Add(FString(Field.Key), bRow ? SliceRows(T, Offset, Rows, bBatched) : T);
 			continue;
 		}
 		const TArray<TSharedPtr<FJsonValue>>* Values = nullptr;

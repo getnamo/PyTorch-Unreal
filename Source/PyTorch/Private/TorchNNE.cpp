@@ -831,7 +831,7 @@ bool FTorchNNE::ReadSafetensors(const FString& Path, TMap<FString, FPyTensor>& O
 		{ TEXT("U8"), EPyDType::UInt8 }, { TEXT("I16"), EPyDType::Int16 }, { TEXT("U16"), EPyDType::UInt16 }, { TEXT("I32"), EPyDType::Int32 },
 		{ TEXT("U32"), EPyDType::UInt32 }, { TEXT("I64"), EPyDType::Int64 }, { TEXT("U64"), EPyDType::UInt64 }, { TEXT("BOOL"), EPyDType::Bool } };
 	const uint8* Data = File.GetData() + 8 + HeaderSize;
-	for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Header->Values)
+	for (const auto& Field : Header->Values)
 	{
 		if (Field.Key == TEXT("__metadata__"))
 		{
@@ -851,7 +851,7 @@ bool FTorchNNE::ReadSafetensors(const FString& Path, TMap<FString, FPyTensor>& O
 		const int64 Begin = (int64)(*Offsets)[0]->AsNumber();
 		const int64 End = (int64)(*Offsets)[1]->AsNumber();
 		T.Data.Append(Data + Begin, End - Begin);
-		Out.Add(Field.Key, MoveTemp(T));
+		Out.Add(FString(Field.Key), MoveTemp(T));
 	}
 	return true;
 }

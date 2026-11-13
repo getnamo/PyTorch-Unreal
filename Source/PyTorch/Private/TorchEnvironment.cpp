@@ -41,7 +41,7 @@ namespace TorchEnvironmentPrivate
 		bool Save(const FString& Path, const TSharedRef<FJsonObject>& Metadata)
 		{
 			TSharedRef<FJsonObject> Meta = MakeShared<FJsonObject>();
-			for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Metadata->Values)
+			for (const auto& Field : Metadata->Values)
 			{
 				Meta->SetStringField(Field.Key, Field.Value->Type == EJson::String ? Field.Value->AsString() : PythonWire::ToJsonString(Field.Value));
 			}

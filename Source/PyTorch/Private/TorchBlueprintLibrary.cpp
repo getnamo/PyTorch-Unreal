@@ -114,9 +114,9 @@ TArray<FString> UTorchBlueprintLibrary::GetOutputNames(const FTorchResult& Resul
 	Result.Outputs.GetKeys(Names);
 	if (Result.Json.IsValid())
 	{
-		for (const TPair<FString, TSharedPtr<FJsonValue>>& Field : Result.Json->Values)
+		for (const auto& Field : Result.Json->Values)
 		{
-			Names.AddUnique(Field.Key);
+			Names.AddUnique(FString(Field.Key));
 		}
 	}
 	return Names;
